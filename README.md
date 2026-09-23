@@ -5,10 +5,12 @@ Ghostty, Neovim, shell configurations and opt-in macOS preferences. The installe
 ## Install
 
 ```sh
-git clone https://github.com/snowykr/dotfiles.git "$HOME/.dotfiles"
+gh repo clone snowykr/dotfiles "$HOME/.dotfiles"
 "$HOME/.dotfiles/install.sh" --dry-run
 "$HOME/.dotfiles/install.sh"
 ```
+
+This repository is private: authenticate GitHub CLI on each machine before cloning, or use another authenticated Git transport. On snowyserver-n100, configure GitHub access and verify its host key before cloning over SSH.
 
 The default run installs missing **Starship and eza first**, then links the selected shell configuration and Neovim. On macOS this uses Homebrew; on Ubuntu it uses `apt` for eza and Starship's official installer for Starship. If both commands already exist, no packages are changed. Ghostty is linked on macOS. Use `--no-packages` to link configurations without installing dependencies. Existing files **and directories** are moved into a timestamped directory under `~/.dotfiles-backups/` before linking; inspect the backup before deleting it. Re-running skips correct links. The other shell's startup file is left unchanged. Do not use `sudo` or pipe an unreviewed network script into a shell.
 
@@ -31,5 +33,9 @@ Install Homebrew from https://brew.sh/ first if it is missing. `--homebrew` inst
 ## macOS preferences
 
 `scripts/macos-defaults.sh` records settings read from the Mac at the time this repo was assembled: dark appearance; Dock auto-hide, zero delay, 0.5-second animation, 44-pixel icons and no recent apps; Finder path bar and all filename extensions. It checks existing values and only writes differences, then restarts Dock/Finder at most once each. Review with `scripts/macos-defaults.sh --dry-run`. Dark appearance can require signing out and back in for all apps to update. Dock pinned apps, keyboard/input sources, security settings, and wallpaper are intentionally not reset.
+
+## Verify
+
+Run `sh scripts/test-install.sh` and `sh scripts/test-install-tools.sh` to exercise backups, repeat installs, shell selection, macOS preference changes, and first-run packages without modifying the host. Run `./install.sh --dry-run --macos` on a Mac before applying preferences.
 
 The old `ghostty-config` and `nvim-config` repositories remain untouched as historical sources. The source for Neovim includes the locally modified `lazy-lock.json` from migration day; inspect it when updating plugins.
