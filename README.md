@@ -1,10 +1,10 @@
 # dotfiles
 
-Ghostty, Neovim, shell configurations and opt-in macOS preferences. The installer selects **zsh** or **bash** from the login shell (`$SHELL`), not the shell used to launch the script. On this Mac that selects zsh; on snowyserver-n100 it selects bash. Override with `--shell zsh` or `--shell bash` if needed.
+Ghostty, Neovim, shell, and macOS settings.
 
 ## Install
 
-The repo is private, so **install and authenticate `gh` before cloning**. Homebrew is a prerequisite on macOS (https://brew.sh/). Install GitHub CLI with `brew install gh` on macOS, or `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu. Then, on each new machine:
+This repository is private. Install GitHub CLI first: `brew install gh` on macOS (requires [Homebrew](https://brew.sh/)), or `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu.
 
 ```sh
 gh auth login --hostname github.com --git-protocol https --web
@@ -14,32 +14,27 @@ gh repo clone snowykr/dotfiles "$HOME/.dotfiles"
 "$HOME/.dotfiles/install.sh"
 ```
 
-On snowyserver-n100, `gh` is already installed but still requires authentication before a private clone. HTTPS with GitHub CLI avoids depending on an unverified GitHub SSH host key. If `gh` is unavailable, install it first as above; the installer also ensures it remains installed on subsequent runs.
+The installer links `.zshrc` or `.bashrc` according to the login shell (`$SHELL`), plus Neovim configuration. On macOS it also links Ghostty configuration. Existing files and directories are backed up under `~/.dotfiles-backups/`; correct links are skipped on repeat runs. Use `--shell zsh` or `--shell bash` to override shell selection.
 
-The default run installs missing **Starship, eza, and gh first**, then links the selected shell configuration and Neovim. On macOS this uses Homebrew; on Ubuntu it uses `apt` for eza and Starship's official installer for Starship. If all three commands already exist, no packages are changed. It also sets global Git `user.name=snowykr` and `user.email=snowykr22@gmail.com`, writing only when different. Ghostty is linked on macOS. Use `--no-packages` to link configurations without installing dependencies. Existing files **and directories** are moved into a timestamped directory under `~/.dotfiles-backups/` before linking; inspect the backup before deleting it. Re-running skips correct links. The other shell's startup file is left unchanged. Do not use `sudo` or pipe an unreviewed network script into a shell.
+Missing `starship`, `eza`, and `gh` are installed automatically. The installer also sets global Git `user.name=snowykr` and `user.email=snowykr22@gmail.com`. Use `--no-packages` to skip package installation. On Ubuntu, packages use `apt`; Starship uses its official installer into `~/.local/bin`.
 
-On macOS, install/update the listed Homebrew packages and apply the captured preferences explicitly:
+To install the remaining macOS apps and tools from `Brewfile` and apply system settings:
 
 ```sh
 "$HOME/.dotfiles/install.sh" --homebrew --macos --dry-run
 "$HOME/.dotfiles/install.sh" --homebrew --macos
 ```
 
-Install Homebrew from https://brew.sh/ first if it is missing. `--homebrew` installs the entire Brewfile (Ghostty, Neovim, fonts, search tools, Starship, eza, gh); it is separate from the default minimal Starship/eza/gh bootstrap. `--macos` without `--homebrew` applies only preferences in addition to the normal install. macOS preferences are skipped on Linux; requesting macOS-only steps there is an error. Neovim 0.11+ is required by the included configuration. The Neovim plugin manager bootstraps at first startup.
+## Configuration
 
-## Shell configuration
-
-- `shell/zshrc` is based on the Mac's current `~/.zshrc`; `shell/bashrc` is based on snowyserver-n100's `~/.bashrc`. Shared shortcuts are in `shell/common.sh`; `gmg` runs `git merge` (`gm` is not defined to avoid conflicts).
-- Startup files are symlinked into `$HOME`, and load `common.sh` from their symlink target. Host-specific or secret values belong in **untracked** `~/.zshrc.local` or `~/.bashrc.local`.
-- Optional programs (pyenv, rbenv, nvm, starship, ble.sh, Bun completion) load only when installed. Destructive `fixperms` and forced Git restoration have not been carried over.
-- The installer does not change the login shell. On a new host, set it separately with `chsh` only after confirming the desired shell is available.
-
-## macOS preferences
-
-`scripts/macos-defaults.sh` records settings read from the Mac at the time this repo was assembled: dark appearance; Dock auto-hide, zero delay, 0.5-second animation, 44-pixel icons and no recent apps; Finder path bar and all filename extensions. It checks existing values and only writes differences, then restarts Dock/Finder at most once each. Review with `scripts/macos-defaults.sh --dry-run`. Dark appearance can require signing out and back in for all apps to update. Dock pinned apps, keyboard/input sources, security settings, and wallpaper are intentionally not reset.
+- **Shell:** shared Git/development shortcuts (`gmg` runs `git merge`), optional tool initialization, and local overrides (`~/.zshrc.local` / `~/.bashrc.local`).
+- **Neovim:** `lazy.nvim`, plugins, and `lazy-lock.json`. Requires Neovim 0.11+.
+- **Ghostty:** fonts, colors, and terminal behavior.
+- **macOS:** dark appearance; Dock auto-hide, zero delay, 0.5-second animation, 44-pixel icons, and hidden recent apps; Finder path bar and filename extensions. Unchanged values are skipped; Dock/Finder restart only when needed.
 
 ## Verify
 
-Run `sh scripts/test-install.sh` and `sh scripts/test-install-tools.sh` to exercise backups, repeat installs, shell selection, macOS preference changes, and first-run packages without modifying the host. Run `./install.sh --dry-run --macos` on a Mac before applying preferences.
-
-The old `ghostty-config` and `nvim-config` repositories remain untouched as historical sources. The source for Neovim includes the locally modified `lazy-lock.json` from migration day; inspect it when updating plugins.
+```sh
+sh scripts/test-install.sh
+sh scripts/test-install-tools.sh
+```

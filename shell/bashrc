@@ -1,4 +1,4 @@
-# Interactive bash configuration, based on snowyserver-n100's ~/.bashrc.
+# Interactive bash configuration.
 case $- in *i*) ;; *) return ;; esac
 
 HISTCONTROL=ignoreboth
