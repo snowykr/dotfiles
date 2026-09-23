@@ -1,0 +1,8 @@
+brew "neovim"
+brew "ripgrep"
+brew "fd"
+brew "starship"
+brew "eza"
+cask "ghostty"
+cask "font-jetbrains-mono-nerd-font"
+cask "font-pretendard"

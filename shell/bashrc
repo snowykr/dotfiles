@@ -1,0 +1,60 @@
+# Interactive bash configuration, based on snowyserver-n100's ~/.bashrc.
+case $- in *i*) ;; *) return ;; esac
+
+HISTCONTROL=ignoreboth
+HISTSIZE=1000
+HISTFILESIZE=2000
+shopt -s histappend checkwinsize
+
+if [ -r /etc/debian_chroot ]; then
+    debian_chroot=$(</etc/debian_chroot)
+fi
+PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
+if [ -x /usr/bin/dircolors ]; then
+    eval "$(dircolors -b)"
+    alias ls='ls --color=auto'
+fi
+alias ll='ls -alF'
+alias la='ls -A'
+
+for directory in "$HOME/.local/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin" "$HOME/.pyenv/bin" /usr/local/go/bin "$HOME/go/bin"; do
+    if [ -d "$directory" ]; then
+        case ":$PATH:" in *":$directory:"*) ;; *) PATH="$directory:$PATH" ;; esac
+    fi
+done
+export PATH GOPATH="$HOME/go" BUN_INSTALL="$HOME/.bun"
+
+[ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+[ -r "$HOME/.local/bin/env" ] && . "$HOME/.local/bin/env"
+if command -v pyenv >/dev/null 2>&1; then
+    eval "$(pyenv init - bash)"
+fi
+if command -v starship >/dev/null 2>&1; then
+    eval "$(starship init bash)"
+fi
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+[ -r "$HOME/.local/share/blesh/ble.sh" ] && . "$HOME/.local/share/blesh/ble.sh"
+
+if ! shopt -oq posix; then
+    if [ -r /usr/share/bash-completion/bash_completion ]; then
+        . /usr/share/bash-completion/bash_completion
+    elif [ -r /etc/bash_completion ]; then
+        . /etc/bash_completion
+    fi
+fi
+
+_dotfiles_bash_source=$(readlink "$HOME/.bashrc")
+if [ -n "$_dotfiles_bash_source" ]; then
+    . "$(dirname "$_dotfiles_bash_source")/common.sh"
+fi
+unset _dotfiles_bash_source
+alias rc='nvim "$HOME/.bashrc"'
+alias s='source "$HOME/.bashrc"'
+alias tsw='tmux select-window -t'
+alias tnw='tmux new-window'
+alias tkw='tmux kill-window'
+
+[ -r "$HOME/.bash_aliases" ] && . "$HOME/.bash_aliases"
+[ -r "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"

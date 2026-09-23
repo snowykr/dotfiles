@@ -1,0 +1,58 @@
+# Interactive zsh configuration (macOS).
+[[ -o interactive ]] || return
+
+typeset -U path
+for directory in "$HOME/.local/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin" "$HOME/.rbenv/bin" /opt/homebrew/bin /opt/homebrew/opt/openjdk/bin; do
+    [[ -d "$directory" ]] && path=("$directory" $path)
+done
+export PATH
+[[ -d /opt/homebrew/opt/openjdk/include ]] && export CPPFLAGS='-I/opt/homebrew/opt/openjdk/include'
+
+if (( $+commands[pyenv] )); then
+    eval "$(pyenv init - zsh)"
+fi
+if (( $+commands[rbenv] )); then
+    eval "$(rbenv init - zsh)"
+fi
+if (( $+commands[starship] )); then
+    eval "$(starship init zsh)"
+fi
+export NVM_DIR="$HOME/.nvm"
+[[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
+[[ -s /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[[ -s /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+[[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
+
+GJCDEV_REPO="$HOME/Documents/coding/gajae-code-upstream"
+_dotfiles_zsh_source=$(readlink "$HOME/.zshrc")
+if [[ -n "$_dotfiles_zsh_source" ]]; then
+    source "${_dotfiles_zsh_source:h}/common.sh"
+fi
+unset _dotfiles_zsh_source
+alias rc='nvim "$HOME/.zshrc"'
+alias s='source "$HOME/.zshrc"'
+
+# Preserve Ghostty's current directory across ssh/tmux splits.
+_ghostty_osc7_cwd() {
+    emulate -L zsh
+    local encoded="${PWD}"
+    encoded="${encoded//\%/%25}"
+    encoded="${encoded// /%20}"
+    encoded="${encoded//\#/%23}"
+    encoded="${encoded//\?/%3F}"
+    encoded="${encoded//\[/%5B}"
+    encoded="${encoded//\]/%5D}"
+    local osc=$'\e]7;file://'"${USER}@${HOST}${encoded}"$'\a'
+    if [[ -n "${TMUX:-}" ]]; then
+        printf '\ePtmux;\e%s\e\\' "$osc"
+    else
+        printf '%s' "$osc"
+    fi
+}
+if [[ -n "${GHOSTTY_RESOURCES_DIR:-}" || "${TERM_PROGRAM:-}" == ghostty ]]; then
+    autoload -Uz add-zsh-hook
+    add-zsh-hook precmd _ghostty_osc7_cwd
+    add-zsh-hook chpwd _ghostty_osc7_cwd
+fi
+
+[[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
