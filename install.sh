@@ -52,6 +52,17 @@ if [ "$with_tools" -eq 1 ]; then
     fi
 fi
 
+configure_git() {
+    key=$1 desired=$2
+    current=$(git config --global --get "$key" || :)
+    if [ "$current" != "$desired" ]; then
+        printf 'Git config: %s -> %s\n' "$key" "$desired"
+        [ "$dry_run" -eq 1 ] || git config --global "$key" "$desired"
+    fi
+}
+configure_git user.name snowykr
+configure_git user.email snowykr22@gmail.com
+
 backup_dir="$HOME/.dotfiles-backups/$(date +%Y%m%d-%H%M%S)-$$"
 backed_up=0
 

@@ -12,8 +12,11 @@ printf 'previous bash\n' > "$root/bash/.bashrc"
 
 HOME="$root/zsh" SHELL=/bin/zsh "$repo/install.sh" --dry-run --no-packages > "$root/dry-run"
 [ ! -e "$root/zsh/.dotfiles-backups" ]
+[ ! -e "$root/zsh/.gitconfig" ]
 [ ! -L "$root/zsh/.zshrc" ]
 HOME="$root/zsh" SHELL=/bin/zsh "$repo/install.sh" --no-packages > "$root/installed"
+[ "$(HOME="$root/zsh" git config --global --get user.name)" = snowykr ]
+[ "$(HOME="$root/zsh" git config --global --get user.email)" = snowykr22@gmail.com ]
 [ "$(readlink "$root/zsh/.zshrc")" = "$repo/shell/zshrc" ]
 [ "$(readlink "$root/zsh/.config/nvim")" = "$repo/config/nvim" ]
 [ "$(readlink "$root/zsh/.config/ghostty/config")" = "$repo/config/ghostty/config" ]
@@ -29,6 +32,10 @@ set -- "$root/zsh"/.dotfiles-backups/*
 HOME="$root/bash" SHELL=/bin/bash "$repo/install.sh" --no-packages > "$root/bash-run"
 [ "$(readlink "$root/bash/.bashrc")" = "$repo/shell/bashrc" ]
 [ ! -e "$root/bash/.zshrc" ]
+bash --noprofile -c '. "$1"; alias gmg >/dev/null; ! alias gm >/dev/null 2>&1' _ "$repo/shell/common.sh"
+if command -v zsh >/dev/null 2>&1; then
+    zsh -f -c 'source "$1"; alias gmg >/dev/null; ! alias gm >/dev/null 2>&1' _ "$repo/shell/common.sh"
+fi
 if HOME="$root/bash" SHELL=/bin/fish "$repo/install.sh" --no-packages > "$root/error" 2>&1; then
     printf 'Unknown shell should fail\n' >&2
     exit 1

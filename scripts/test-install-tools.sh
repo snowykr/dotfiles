@@ -12,7 +12,8 @@ HOME="$root/home" TEST_LOG="$root/log" PATH="$root/bin:/usr/bin:/bin" "$repo/scr
 [ ! -e "$root/log" ]
 HOME="$root/home" TEST_LOG="$root/log" PATH="$root/bin:/usr/bin:/bin" "$repo/scripts/install-tools.sh" > "$root/mac-output"
 [ "$(cat "$root/log")" = 'brew install starship
-brew install eza' ]
+brew install eza
+brew install gh' ]
 
 printf '#!/bin/sh\nprintf "Linux\\n"\n' > "$root/bin/uname"
 printf '#!/bin/sh\nexit 0\n' > "$root/bin/apt-get"
@@ -23,6 +24,6 @@ chmod +x "$root/bin/uname" "$root/bin/apt-get" "$root/bin/sudo" "$root/bin/curl"
 : > "$root/log"
 HOME="$root/home" TEST_LOG="$root/log" MOCK_INSTALLER="$root/installer" PATH="$root/bin:/usr/bin:/bin" "$repo/scripts/install-tools.sh" > "$root/linux-output"
 [ "$(cat "$root/log")" = 'sudo apt-get update
-sudo apt-get install -y eza' ]
+sudo apt-get install -y eza gh' ]
 [ "$(cat "$root/home/.local/bin/starship")" = ready ]
 printf 'Mocked macOS and Linux package installations passed.\n'

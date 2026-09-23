@@ -4,15 +4,19 @@ Ghostty, Neovim, shell configurations and opt-in macOS preferences. The installe
 
 ## Install
 
+The repo is private, so **install and authenticate `gh` before cloning**. Homebrew is a prerequisite on macOS (https://brew.sh/). Install GitHub CLI with `brew install gh` on macOS, or `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu. Then, on each new machine:
+
 ```sh
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git
 gh repo clone snowykr/dotfiles "$HOME/.dotfiles"
 "$HOME/.dotfiles/install.sh" --dry-run
 "$HOME/.dotfiles/install.sh"
 ```
 
-This repository is private: authenticate GitHub CLI on each machine before cloning, or use another authenticated Git transport. On snowyserver-n100, configure GitHub access and verify its host key before cloning over SSH.
+On snowyserver-n100, `gh` is already installed but still requires authentication before a private clone. HTTPS with GitHub CLI avoids depending on an unverified GitHub SSH host key. If `gh` is unavailable, install it first as above; the installer also ensures it remains installed on subsequent runs.
 
-The default run installs missing **Starship and eza first**, then links the selected shell configuration and Neovim. On macOS this uses Homebrew; on Ubuntu it uses `apt` for eza and Starship's official installer for Starship. If both commands already exist, no packages are changed. Ghostty is linked on macOS. Use `--no-packages` to link configurations without installing dependencies. Existing files **and directories** are moved into a timestamped directory under `~/.dotfiles-backups/` before linking; inspect the backup before deleting it. Re-running skips correct links. The other shell's startup file is left unchanged. Do not use `sudo` or pipe an unreviewed network script into a shell.
+The default run installs missing **Starship, eza, and gh first**, then links the selected shell configuration and Neovim. On macOS this uses Homebrew; on Ubuntu it uses `apt` for eza and Starship's official installer for Starship. If all three commands already exist, no packages are changed. It also sets global Git `user.name=snowykr` and `user.email=snowykr22@gmail.com`, writing only when different. Ghostty is linked on macOS. Use `--no-packages` to link configurations without installing dependencies. Existing files **and directories** are moved into a timestamped directory under `~/.dotfiles-backups/` before linking; inspect the backup before deleting it. Re-running skips correct links. The other shell's startup file is left unchanged. Do not use `sudo` or pipe an unreviewed network script into a shell.
 
 On macOS, install/update the listed Homebrew packages and apply the captured preferences explicitly:
 
@@ -21,11 +25,11 @@ On macOS, install/update the listed Homebrew packages and apply the captured pre
 "$HOME/.dotfiles/install.sh" --homebrew --macos
 ```
 
-Install Homebrew from https://brew.sh/ first if it is missing. `--homebrew` installs the entire Brewfile (Ghostty, Neovim, fonts, search tools, Starship, eza); it is separate from the default minimal Starship/eza bootstrap. `--macos` without `--homebrew` applies only preferences in addition to the normal install. macOS preferences are skipped on Linux; requesting macOS-only steps there is an error. Neovim 0.11+ is required by the included configuration. The Neovim plugin manager bootstraps at first startup.
+Install Homebrew from https://brew.sh/ first if it is missing. `--homebrew` installs the entire Brewfile (Ghostty, Neovim, fonts, search tools, Starship, eza, gh); it is separate from the default minimal Starship/eza/gh bootstrap. `--macos` without `--homebrew` applies only preferences in addition to the normal install. macOS preferences are skipped on Linux; requesting macOS-only steps there is an error. Neovim 0.11+ is required by the included configuration. The Neovim plugin manager bootstraps at first startup.
 
 ## Shell configuration
 
-- `shell/zshrc` is based on the Mac's current `~/.zshrc`; `shell/bashrc` is based on snowyserver-n100's `~/.bashrc`. Shared shortcuts are in `shell/common.sh`.
+- `shell/zshrc` is based on the Mac's current `~/.zshrc`; `shell/bashrc` is based on snowyserver-n100's `~/.bashrc`. Shared shortcuts are in `shell/common.sh`; `gmg` runs `git merge` (`gm` is not defined to avoid conflicts).
 - Startup files are symlinked into `$HOME`, and load `common.sh` from their symlink target. Host-specific or secret values belong in **untracked** `~/.zshrc.local` or `~/.bashrc.local`.
 - Optional programs (pyenv, rbenv, nvm, starship, ble.sh, Bun completion) load only when installed. Destructive `fixperms` and forced Git restoration have not been carried over.
 - The installer does not change the login shell. On a new host, set it separately with `chsh` only after confirming the desired shell is available.
