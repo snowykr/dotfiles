@@ -19,12 +19,18 @@ HOME="$root/zsh" SHELL=/bin/zsh "$repo/install.sh" --no-packages > "$root/instal
 [ "$(HOME="$root/zsh" git config --global --get user.email)" = snowykr22@gmail.com ]
 [ "$(readlink "$root/zsh/.zshrc")" = "$repo/shell/zshrc" ]
 [ "$(readlink "$root/zsh/.config/nvim")" = "$repo/config/nvim" ]
-[ "$(readlink "$root/zsh/.config/ghostty/config")" = "$repo/config/ghostty/config" ]
+if [ "$(uname -s)" = Darwin ]; then
+    [ "$(readlink "$root/zsh/.config/ghostty/config")" = "$repo/config/ghostty/config" ]
+else
+    [ "$(cat "$root/zsh/.config/ghostty/config")" = 'old ghostty' ]
+fi
 set -- "$root/zsh"/.dotfiles-backups/*
 [ "$#" -eq 1 ]
 [ "$(cat "$1/.zshrc")" = 'previous zsh' ]
 [ "$(cat "$1/.config/nvim/local.txt")" = 'local nvim' ]
-[ "$(cat "$1/.config/ghostty/config")" = 'old ghostty' ]
+if [ "$(uname -s)" = Darwin ]; then
+    [ "$(cat "$1/.config/ghostty/config")" = 'old ghostty' ]
+fi
 HOME="$root/zsh" SHELL=/bin/zsh "$repo/install.sh" --no-packages > "$root/rerun"
 set -- "$root/zsh"/.dotfiles-backups/*
 [ "$#" -eq 1 ]
@@ -42,9 +48,10 @@ if HOME="$root/bash" SHELL=/bin/fish "$repo/install.sh" --no-packages > "$root/e
 fi
 
 # Use a mock preference database so macOS writes never touch the host.
+printf '#!/bin/sh\nprintf "Darwin\\n"\n' > "$root/stubs/uname"
 printf '#!/bin/sh\nif [ "$1" = read ]; then\n    case "$2 $3" in\n        "-g AppleInterfaceStyle") echo Dark;;\n        "com.apple.dock autohide") echo 1;;\n        "com.apple.dock autohide-delay") echo 0;;\n        "com.apple.dock autohide-time-modifier") echo 0.5;;\n        "com.apple.dock tilesize") echo 20;;\n        "com.apple.dock show-recents") echo 0;;\n        "com.apple.finder ShowPathbar") echo 1;;\n        "-g AppleShowAllExtensions") echo 1;;\n    esac\nelse\n    printf "%%s\\n" "$*" >> "$TEST_LOG"\nfi\n' > "$root/stubs/defaults"
 printf '#!/bin/sh\nprintf "restart %%s\\n" "$*" >> "$TEST_LOG"\n' > "$root/stubs/killall"
-chmod +x "$root/stubs/defaults" "$root/stubs/killall"
+chmod +x "$root/stubs/uname" "$root/stubs/defaults" "$root/stubs/killall"
 TEST_LOG="$root/preferences" PATH="$root/stubs:$PATH" "$repo/scripts/macos-defaults.sh" --dry-run > "$root/prefs-preview"
 [ ! -e "$root/preferences" ]
 TEST_LOG="$root/preferences" PATH="$root/stubs:$PATH" "$repo/scripts/macos-defaults.sh" > "$root/prefs-result"
