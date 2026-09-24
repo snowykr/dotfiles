@@ -34,8 +34,29 @@ ensure_pref() {
     fi
 }
 
-# Values captured from this Mac; do not reset Dock contents or input sources.
+ensure_unset() {
+    domain=$1 key=$2
+    if defaults read "$domain" "$key" >/dev/null 2>&1; then
+        printf '%s %s: remove override\n' "$domain" "$key"
+        if [ "$dry_run" -eq 0 ]; then
+            defaults delete "$domain" "$key"
+            appearance_changed=1
+        fi
+    fi
+}
+
+# Preserve the current appearance: Dark with system defaults for other options.
 ensure_pref -g AppleInterfaceStyle string Dark appearance
+ensure_unset -g AppleInterfaceStyleSwitchesAutomatically
+ensure_unset -g AppleAccentColor
+ensure_unset -g AppleHighlightColor
+ensure_unset -g AppleAquaColorVariant
+ensure_unset -g AppleReduceDesktopTinting
+ensure_unset -g AppleShowScrollBars
+ensure_unset -g AppleScrollerPagingBehavior
+ensure_unset -g AppleSidebarIconSize
+
+# Do not reset Dock contents or input sources.
 ensure_pref com.apple.dock autohide bool true Dock
 ensure_pref com.apple.dock autohide-delay float 0 Dock
 ensure_pref com.apple.dock autohide-time-modifier float 0.5 Dock
