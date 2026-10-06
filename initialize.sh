@@ -7,9 +7,10 @@ dry_run=0
 with_brew=0
 with_macos=1
 with_tools=1
+with_auto_update=1
 
 usage() {
-    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos]\n' "$0"
+    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos] [--no-auto-update]\n' "$0"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -22,6 +23,7 @@ while [ "$#" -gt 0 ]; do
         --no-packages) with_tools=0 ;;
         --homebrew) with_brew=1 ;;
         --no-macos) with_macos=0 ;;
+        --no-auto-update) with_auto_update=0 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -120,5 +122,14 @@ if [ "$with_macos" -eq 1 ]; then
         "$repo/scripts/macos-defaults.sh" --dry-run
     else
         "$repo/scripts/macos-defaults.sh"
+    fi
+fi
+
+# Registration is the only maintenance operation performed during initialization.
+if [ "$with_auto_update" -eq 1 ]; then
+    if [ "$dry_run" -eq 1 ]; then
+        /bin/sh "$repo/maintain.sh" enable --dry-run
+    else
+        /bin/sh "$repo/maintain.sh" enable
     fi
 fi

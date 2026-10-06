@@ -40,12 +40,12 @@ printf 'previous bash\n' > "$root/linux/.bashrc"
 printf 'linux ghostty\n' > "$root/linux/.config/ghostty/config"
 
 # OS defaults override the login shell; previews must not mutate anything.
-HOME="$root/mac" SHELL=/bin/bash "$repo/install.sh" --dry-run --no-packages > "$root/dry-run"
+HOME="$root/mac" SHELL=/bin/bash "$repo/initialize.sh" --dry-run --no-packages --no-auto-update > "$root/dry-run"
 [ ! -e "$root/mac/.dotfiles-backups" ]
 [ ! -e "$root/mac/.gitconfig" ]
 [ ! -L "$root/mac/.zshrc" ]
 [ ! -e "$root/preferences" ]
-HOME="$root/mac" SHELL=/bin/bash "$repo/install.sh" --no-packages > "$root/installed"
+HOME="$root/mac" SHELL=/bin/bash "$repo/initialize.sh" --no-packages --no-auto-update > "$root/installed"
 [ "$(HOME="$root/mac" git config --global --get user.name)" = snowykr ]
 [ "$(HOME="$root/mac" git config --global --get user.email)" = snowykr22@gmail.com ]
 [ "$(readlink "$root/mac/.zshrc")" = "$repo/shell/zshrc" ]
@@ -70,50 +70,50 @@ set -- "$root/mac"/.dotfiles-backups/*
 [ "$(cat "$1/.zshrc")" = 'previous zsh' ]
 [ "$(cat "$1/.config/nvim/local.txt")" = 'local nvim' ]
 [ "$(cat "$1/.config/ghostty/config")" = 'old ghostty' ]
-MOCK_APPLIED=1 TEST_LOG="$root/unchanged" HOME="$root/mac" SHELL=/bin/fish "$repo/install.sh" --no-packages > "$root/rerun"
+MOCK_APPLIED=1 TEST_LOG="$root/unchanged" HOME="$root/mac" SHELL=/bin/fish "$repo/initialize.sh" --no-packages --no-auto-update > "$root/rerun"
 set -- "$root/mac"/.dotfiles-backups/*
 [ "$#" -eq 1 ]
 [ ! -e "$root/unchanged" ]
 
-MOCK_OS=Linux TEST_LOG="$root/linux-preferences" HOME="$root/linux" SHELL=/bin/zsh "$repo/install.sh" --dry-run --no-packages > "$root/linux-preview"
+MOCK_OS=Linux TEST_LOG="$root/linux-preferences" HOME="$root/linux" SHELL=/bin/zsh "$repo/initialize.sh" --dry-run --no-packages --no-auto-update > "$root/linux-preview"
 [ ! -L "$root/linux/.bashrc" ]
 [ ! -e "$root/linux/.gitconfig" ]
-MOCK_OS=Linux TEST_LOG="$root/linux-preferences" HOME="$root/linux" SHELL=/bin/zsh "$repo/install.sh" --no-packages > "$root/linux-run"
+MOCK_OS=Linux TEST_LOG="$root/linux-preferences" HOME="$root/linux" SHELL=/bin/zsh "$repo/initialize.sh" --no-packages --no-auto-update > "$root/linux-run"
 [ "$(readlink "$root/linux/.bashrc")" = "$repo/shell/bashrc" ]
 [ "$(readlink "$root/linux/.config/nvim")" = "$repo/config/nvim" ]
 [ ! -e "$root/linux/.zshrc" ]
 [ ! -e "$root/linux-preferences" ]
 [ "$(cat "$root/linux/.config/ghostty/config")" = 'linux ghostty' ]
-MOCK_OS=Linux HOME="$root/linux" SHELL= "$repo/install.sh" --no-packages > "$root/linux-rerun"
+MOCK_OS=Linux HOME="$root/linux" SHELL= "$repo/initialize.sh" --no-packages --no-auto-update > "$root/linux-rerun"
 set -- "$root/linux"/.dotfiles-backups/*
 [ "$#" -eq 1 ]
 [ "$(cat "$1/.bashrc")" = 'previous bash' ]
 
 # Explicit shell selection and macOS opt-out remain available.
 mkdir -p "$root/override" "$root/linux-zsh"
-TEST_LOG="$root/opt-out-prefs" HOME="$root/override" "$repo/install.sh" --shell bash --no-macos --no-packages > "$root/override-run"
+TEST_LOG="$root/opt-out-prefs" HOME="$root/override" "$repo/initialize.sh" --shell bash --no-macos --no-packages --no-auto-update > "$root/override-run"
 [ "$(readlink "$root/override/.bashrc")" = "$repo/shell/bashrc" ]
 [ ! -e "$root/override/.zshrc" ]
 [ ! -e "$root/opt-out-prefs" ]
-MOCK_OS=Linux HOME="$root/linux-zsh" "$repo/install.sh" --shell zsh --no-packages > "$root/linux-zsh-run"
+MOCK_OS=Linux HOME="$root/linux-zsh" "$repo/initialize.sh" --shell zsh --no-packages --no-auto-update > "$root/linux-zsh-run"
 [ "$(readlink "$root/linux-zsh/.zshrc")" = "$repo/shell/zshrc" ]
-TEST_LOG="$root/brew-preview-log" HOME="$root/apps" "$repo/install.sh" --homebrew --no-macos --dry-run --no-packages > "$root/apps-preview"
+TEST_LOG="$root/brew-preview-log" HOME="$root/apps" "$repo/initialize.sh" --homebrew --no-macos --dry-run --no-packages --no-auto-update > "$root/apps-preview"
 [ ! -e "$root/brew-preview-log" ]
 [ ! -e "$root/apps" ]
 mkdir -p "$root/apps"
-TEST_LOG="$root/brew-log" HOME="$root/apps" "$repo/install.sh" --homebrew --no-macos --no-packages > "$root/apps-run"
+TEST_LOG="$root/brew-log" HOME="$root/apps" "$repo/initialize.sh" --homebrew --no-macos --no-packages --no-auto-update > "$root/apps-run"
 [ "$(cat "$root/brew-log")" = "brew bundle --file $repo/Brewfile" ]
 
 # Invalid requests and unsupported platforms fail before changing HOME.
-if HOME="$root/invalid" "$repo/install.sh" --shell fish --no-packages > "$root/error" 2>&1; then
+if HOME="$root/invalid" "$repo/initialize.sh" --shell fish --no-packages --no-auto-update > "$root/error" 2>&1; then
     printf 'Invalid shell override should fail\n' >&2
     exit 1
 fi
-if MOCK_OS=FreeBSD HOME="$root/invalid" "$repo/install.sh" --no-packages > "$root/error" 2>&1; then
+if MOCK_OS=FreeBSD HOME="$root/invalid" "$repo/initialize.sh" --no-packages --no-auto-update > "$root/error" 2>&1; then
     printf 'Unsupported OS should fail\n' >&2
     exit 1
 fi
-if MOCK_OS=Linux HOME="$root/invalid" "$repo/install.sh" --homebrew --no-packages > "$root/error" 2>&1; then
+if MOCK_OS=Linux HOME="$root/invalid" "$repo/initialize.sh" --homebrew --no-packages --no-auto-update > "$root/error" 2>&1; then
     printf 'Homebrew apps on Linux should fail\n' >&2
     exit 1
 fi
@@ -209,4 +209,22 @@ if MOCK_OS=Linux "$repo/scripts/macos-defaults.sh" > "$root/error" 2>&1; then
     printf 'Standalone macOS preferences on Linux should fail\n' >&2
     exit 1
 fi
-printf 'Mocked macOS/Linux setup, backup, repeat-run and preference tests passed.\n'
+# Initialization delegates registration only after successful setup.
+fixture="$root/registration repo"
+mkdir -p "$fixture/shell" "$fixture/config/nvim" "$fixture/config/ghostty" "$root/registration-home"
+cp "$repo/initialize.sh" "$fixture/initialize.sh"
+printf '%s\n' '#!/bin/sh
+printf "maintain %s\n" "$*" >> "$REGISTRATION_LOG"
+' > "$fixture/maintain.sh"
+REGISTRATION_LOG="$root/registration-log" HOME="$root/registration-home" "$fixture/initialize.sh" --no-packages --no-macos > "$root/registration-result"
+[ "$(cat "$root/registration-log")" = 'maintain enable' ]
+REGISTRATION_LOG="$root/registration-preview-log" HOME="$root/registration-home" "$fixture/initialize.sh" --no-packages --no-macos --dry-run > "$root/registration-preview"
+[ "$(cat "$root/registration-preview-log")" = 'maintain enable --dry-run' ]
+REGISTRATION_LOG="$root/registration-disabled-log" HOME="$root/registration-home" "$fixture/initialize.sh" --no-packages --no-macos --no-auto-update > "$root/registration-disabled"
+[ ! -e "$root/registration-disabled-log" ]
+if MOCK_OS=FreeBSD REGISTRATION_LOG="$root/registration-failed-log" HOME="$root/registration-home" "$fixture/initialize.sh" --no-packages --no-macos > "$root/registration-error" 2>&1; then
+    printf 'Unsupported initialization should fail\n' >&2
+    exit 1
+fi
+[ ! -e "$root/registration-failed-log" ]
+printf 'Initialization, backup, preferences and maintenance registration tests passed.\n'
