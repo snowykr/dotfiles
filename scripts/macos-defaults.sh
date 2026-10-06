@@ -12,6 +12,7 @@ fi
 
 dock_changed=0
 finder_changed=0
+clock_changed=0
 appearance_changed=0
 
 ensure_pref() {
@@ -29,6 +30,7 @@ ensure_pref() {
         case "$service" in
             Dock) dock_changed=1 ;;
             Finder) finder_changed=1 ;;
+            ControlCenter) clock_changed=1 ;;
             appearance) appearance_changed=1 ;;
         esac
     fi
@@ -45,6 +47,29 @@ ensure_unset() {
     fi
 }
 
+# Disable idle system/display sleep for every power source.
+# Locking can still explicitly turn off the display via loginwindow.
+# Read before writing so repeat installs do not need sudo unnecessarily.
+power_settings=$(pmset -g custom)
+if ! printf '%s\n' "$power_settings" | awk '
+    /^[[:space:]]*(Battery|AC|UPS) Power:/ { profile++; next }
+    profile && ($1 == "sleep" || $1 == "displaysleep") {
+        seen[profile, $1] = 1
+        if ($2 != "0") changed = 1
+    }
+    END {
+        for (i = 1; i <= profile; i++) {
+            if (!seen[i, "sleep"] || !seen[i, "displaysleep"]) changed = 1
+        }
+        exit (profile == 0 || changed)
+    }
+'; then
+    printf 'Power: disable automatic system and display sleep on all power sources\n'
+    if [ "$dry_run" -eq 0 ]; then
+        sudo pmset -a sleep 0 displaysleep 0
+    fi
+fi
+
 # Preserve the current appearance: Dark with system defaults for other options.
 ensure_pref -g AppleInterfaceStyle string Dark appearance
 ensure_unset -g AppleInterfaceStyleSwitchesAutomatically
@@ -55,6 +80,12 @@ ensure_unset -g AppleReduceDesktopTinting
 ensure_unset -g AppleShowScrollBars
 ensure_unset -g AppleScrollerPagingBehavior
 ensure_unset -g AppleSidebarIconSize
+
+# Use a digital, 24-hour menu bar clock with seconds; preserve date options.
+ensure_pref com.apple.menuextra.clock IsAnalog bool false ControlCenter
+ensure_pref com.apple.menuextra.clock Show24Hour bool true ControlCenter
+ensure_pref com.apple.menuextra.clock ShowAMPM bool false ControlCenter
+ensure_pref com.apple.menuextra.clock ShowSeconds bool true ControlCenter
 
 # Do not reset Dock contents or input sources.
 ensure_pref com.apple.dock autohide bool true Dock
@@ -68,6 +99,7 @@ ensure_pref -g AppleShowAllExtensions bool true Finder
 if [ "$dry_run" -eq 0 ]; then
     [ "$dock_changed" -eq 0 ] || killall Dock
     [ "$finder_changed" -eq 0 ] || killall Finder
+    [ "$clock_changed" -eq 0 ] || killall ControlCenter
     if [ "$appearance_changed" -eq 1 ]; then
         printf 'Appearance may require logging out and back in to update every app.\n'
     fi

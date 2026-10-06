@@ -5,11 +5,11 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 mode=auto
 dry_run=0
 with_brew=0
-with_macos=0
+with_macos=1
 with_tools=1
 
 usage() {
-    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--macos]\n' "$0"
+    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos]\n' "$0"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -21,28 +21,34 @@ while [ "$#" -gt 0 ]; do
             shift ;;
         --no-packages) with_tools=0 ;;
         --homebrew) with_brew=1 ;;
-        --macos) with_macos=1 ;;
+        --no-macos) with_macos=0 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
     shift
 done
 
+os=$(uname -s)
+case "$os" in
+    Darwin) default_shell=zsh ;;
+    Linux) default_shell=bash; with_macos=0 ;;
+    *) printf 'Unsupported OS: %s\n' "$os" >&2; exit 2 ;;
+esac
+
 case "$mode" in
-    auto)
-        case "${SHELL:-}" in
-            */zsh) mode=zsh ;;
-            */bash) mode=bash ;;
-            *) printf 'Unknown login shell: %s; use --shell zsh or --shell bash\n' "${SHELL:-unset}" >&2; exit 2 ;;
-        esac ;;
+    auto) mode=$default_shell ;;
     zsh|bash) ;;
     *) usage >&2; exit 2 ;;
 esac
 
-os=$(uname -s)
-if [ "$with_brew" -eq 1 ] || [ "$with_macos" -eq 1 ]; then
-    [ "$os" = Darwin ] || { printf 'Homebrew and macOS preferences require macOS\n' >&2; exit 2; }
+if [ "$with_brew" -eq 1 ]; then
+    [ "$os" = Darwin ] || { printf 'Homebrew app installation requires macOS\n' >&2; exit 2; }
+    command -v brew >/dev/null 2>&1 || {
+        printf 'Homebrew missing: install it from https://brew.sh/ before --homebrew\n' >&2
+        exit 1
+    }
 fi
+printf 'Platform: %s; shell config: %s\n' "$os" "$mode"
 
 if [ "$with_tools" -eq 1 ]; then
     if [ "$dry_run" -eq 1 ]; then
@@ -103,10 +109,6 @@ if [ "$os" = Darwin ]; then
 fi
 
 if [ "$with_brew" -eq 1 ]; then
-    if ! command -v brew >/dev/null 2>&1; then
-        printf 'Homebrew missing: install it from https://brew.sh/ before --homebrew\n' >&2
-        exit 1
-    fi
     if [ "$dry_run" -eq 1 ]; then
         printf 'Would run: brew bundle --file %s/Brewfile\n' "$repo"
     else

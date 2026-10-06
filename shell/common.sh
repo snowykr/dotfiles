@@ -1,5 +1,6 @@
 # Shared interactive shortcuts for bash and zsh.
 alias h='cd "$HOME"'
+alias hr='herdr'
 alias c='clear'
 alias ga='git add'
 alias gaa='git add .'

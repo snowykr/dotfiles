@@ -1,12 +1,24 @@
-# Interactive zsh configuration (macOS).
+# Interactive zsh configuration.
 [[ -o interactive ]] || return
 
 typeset -U path
-for directory in "$HOME/.local/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin" "$HOME/.rbenv/bin" /opt/homebrew/bin /opt/homebrew/opt/openjdk/bin; do
+if [[ "$OSTYPE" == darwin* ]]; then
+    for directory in /opt/homebrew/bin /usr/local/bin; do
+        [[ -d "$directory" ]] && path=("$directory" $path)
+    done
+fi
+for directory in "$HOME/.local/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin" "$HOME/.pyenv/bin" "$HOME/.rbenv/bin"; do
     [[ -d "$directory" ]] && path=("$directory" $path)
 done
 export PATH
-[[ -d /opt/homebrew/opt/openjdk/include ]] && export CPPFLAGS='-I/opt/homebrew/opt/openjdk/include'
+if [[ "$OSTYPE" == darwin* ]] && (( $+commands[brew] )); then
+    _dotfiles_brew_prefix=$(brew --prefix)
+    [[ -d "$_dotfiles_brew_prefix/opt/openjdk/bin" ]] && path=("$_dotfiles_brew_prefix/opt/openjdk/bin" $path)
+    [[ -d "$_dotfiles_brew_prefix/opt/openjdk/include" ]] && export CPPFLAGS="-I$_dotfiles_brew_prefix/opt/openjdk/include"
+    [[ -s "$_dotfiles_brew_prefix/share/zsh-autosuggestions/zsh-autosuggestions.zsh" ]] && source "$_dotfiles_brew_prefix/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
+    [[ -s "$_dotfiles_brew_prefix/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]] && source "$_dotfiles_brew_prefix/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
+    unset _dotfiles_brew_prefix
+fi
 
 if (( $+commands[pyenv] )); then
     eval "$(pyenv init - zsh)"
@@ -19,8 +31,6 @@ if (( $+commands[starship] )); then
 fi
 export NVM_DIR="$HOME/.nvm"
 [[ -s "$NVM_DIR/nvm.sh" ]] && source "$NVM_DIR/nvm.sh"
-[[ -s /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] && source /opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh
-[[ -s /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] && source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 [[ -s "$HOME/.bun/_bun" ]] && source "$HOME/.bun/_bun"
 
 GJCDEV_REPO="$HOME/Documents/coding/gajae-code-upstream"
