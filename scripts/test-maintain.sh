@@ -379,6 +379,11 @@ run_maintain update > "$root/stale-output"
 [ -d "$state_home/dotfiles/update.lock" ]
 run_maintain status > "$root/stale-status"
 case "$(cat "$root/stale-status")" in *"Stale update lock:"*) ;; *) exit 1 ;; esac
+# An unrelated live PID does not establish that the updater still owns the lock.
+printf '%s\n' "$$" > "$state_home/dotfiles/update.lock/pid"
+run_maintain status > "$root/live-pid-status"
+case "$(cat "$root/live-pid-status")" in *"confirm updater ownership"*) ;; *) exit 1 ;; esac
+case "$(cat "$root/live-pid-status")" in *"Update running:"*) exit 1 ;; esac
 rm -rf "$state_home/dotfiles/update.lock"
 
 # Bound logs without dropping errors or rewriting the repository.
@@ -401,6 +406,16 @@ if XDG_STATE_HOME="$root/state-alias" /bin/sh "$checkout/maintain.sh" update > "
     exit 1
 fi
 [ ! -e "$checkout/dotfiles" ]
+# Missing ancestors followed by '..' must not bypass physical containment checks.
+for preview in no yes; do
+    if [ "$preview" = yes ]; then set -- --dry-run; else set --; fi
+    if XDG_STATE_HOME="$root/nonexistent/../state-alias" /bin/sh "$checkout/maintain.sh" update "$@" > "$root/traversal-state-$preview" 2>&1; then
+        printf 'Traversal through a symlink into the repository should be rejected\n' >&2
+        exit 1
+    fi
+    [ ! -e "$checkout/dotfiles" ]
+    [ ! -e "$root/nonexistent" ]
+done
 if XDG_STATE_HOME=relative /bin/sh "$checkout/maintain.sh" update > "$root/relative-state" 2>&1; then
     printf 'Relative state paths should be rejected\n' >&2
     exit 1

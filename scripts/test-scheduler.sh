@@ -28,7 +28,16 @@ case "$1" in
     *) exit 2;;
 esac
 [ "${MOCK_FAIL:-0}" = 0 ] || exit 1
-case "$1" in bootstrap) : > "$MOCK_LOADED";; bootout) rm -f "$MOCK_LOADED";; esac
+case "$1" in
+    bootstrap) cp "$3" "$MOCK_LOADED";;
+    bootout)
+        if [ "${MOCK_BOOTOUT_FAIL_ONCE:-0}" = 1 ] && [ ! -e "$MOCK_BOOTOUT_FAILED" ]; then
+            : > "$MOCK_BOOTOUT_FAILED"
+            exit 1
+        fi
+        rm -f "$MOCK_LOADED"
+        ;;
+esac
 EOF
 cat > "$root/stubs/systemctl" <<'EOF'
 #!/bin/sh
@@ -37,12 +46,16 @@ shift
 [ "${MOCK_UNAVAILABLE:-0}" = 0 ] || exit 1
 case "$1" in
     show-environment) exit 0;;
-    is-enabled|is-active) [ -f "$MOCK_LOADED" ]; exit $?;;
+    is-enabled) [ -f "$MOCK_ENABLED" ]; exit $?;;
+    is-active) [ -f "$MOCK_LOADED" ]; exit $?;;
     daemon-reload|enable|disable|restart) printf '%s\n' "$*" >> "$MOCK_LOG";;
     *) exit 2;;
 esac
 [ "${MOCK_FAIL:-0}" = 0 ] || exit 1
-case "$1" in enable) : > "$MOCK_LOADED";; disable) rm -f "$MOCK_LOADED";; esac
+case "$1" in
+    enable) : > "$MOCK_ENABLED"; : > "$MOCK_LOADED";;
+    disable) rm -f "$MOCK_ENABLED" "$MOCK_LOADED";;
+esac
 EOF
 chmod +x "$root/stubs/"*
 cp "$root/stubs/uname" "$root/missing/uname"
@@ -67,7 +80,9 @@ for MOCK_OS in Darwin Linux; do
     XDG_STATE_HOME="$root/ignored state home"
     MOCK_LOG="$root/$MOCK_OS.mutations"
     MOCK_LOADED="$root/$MOCK_OS.loaded"
-    export MOCK_OS HOME XDG_CONFIG_HOME XDG_STATE_HOME MOCK_LOG MOCK_LOADED
+    MOCK_ENABLED="$root/$MOCK_OS.enabled"
+    MOCK_BOOTOUT_FAILED="$root/$MOCK_OS.bootout-failed"
+    export MOCK_OS HOME XDG_CONFIG_HOME XDG_STATE_HOME MOCK_LOG MOCK_LOADED MOCK_ENABLED MOCK_BOOTOUT_FAILED
     [ "$(run status)" = disabled ]
     [ ! -e "$HOME" ] && [ ! -e "$XDG_CONFIG_HOME" ] && [ ! -e "$state" ]
     run enable --dry-run > "$root/preview"
@@ -103,6 +118,9 @@ for MOCK_OS in Darwin Linux; do
             grep -F 'state & \" %% $ \\"' "$definition"
             grep -x 'OnCalendar=\*-\*-\* \*:0/15:00' "$timer"
             grep -x 'Persistent=true' "$timer"
+            if command -v systemd-analyze >/dev/null 2>&1; then
+                systemd-analyze verify "$definition" "$timer"
+            fi
             ;;
     esac
     grep -F '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' "$definition"
@@ -115,6 +133,52 @@ for MOCK_OS in Darwin Linux; do
     [ "$(run enable)" = enabled ]
     ! cmp -s "$definition" "$root/before"
     grep -F ' changed/maintain.sh' "$definition"
+    if [ "$MOCK_OS" = Darwin ]; then
+        cp "$MOCK_LOADED" "$root/loaded-before-retry"
+        checkout="$checkout requested"
+        XDG_CONFIG_HOME="$root/Darwin requested config"
+        XDG_STATE_HOME="$root/Darwin requested state"
+        state=$XDG_STATE_HOME/dotfiles
+        MOCK_BOOTOUT_FAIL_ONCE=1; export MOCK_BOOTOUT_FAIL_ONCE
+        expect_failure enable
+        cmp "$MOCK_LOADED" "$root/loaded-before-retry"
+        ! cmp -s "$definition" "$MOCK_LOADED"
+        grep -F ' changed requested/maintain.sh</string>' "$definition"
+        grep -F "<string>$XDG_CONFIG_HOME</string>" "$definition"
+        grep -F "<string>$XDG_STATE_HOME</string>" "$definition"
+        [ "$(run enable)" = enabled ]
+        cmp "$definition" "$MOCK_LOADED"
+        grep -F ' changed requested/maintain.sh</string>' "$MOCK_LOADED"
+        grep -F "<string>$XDG_CONFIG_HOME</string>" "$MOCK_LOADED"
+        grep -F "<string>$XDG_STATE_HOME</string>" "$MOCK_LOADED"
+    fi
+    # Missing owned definitions must not hide a running native job or timer.
+    cp "$MOCK_LOG" "$root/log-before-missing-definitions"
+    case "$MOCK_OS" in
+        Darwin)
+            cp "$definition" "$root/missing-definition"
+            rm "$definition"
+            expect_failure disable
+            [ -f "$MOCK_LOADED" ]
+            cmp "$MOCK_LOG" "$root/log-before-missing-definitions"
+            mv "$root/missing-definition" "$definition"
+            ;;
+        Linux)
+            cp "$definition" "$root/missing-service"
+            cp "$timer" "$root/missing-timer"
+            rm "$definition" "$timer" "$MOCK_ENABLED"
+            [ "$(run status)" = 'active (not enabled)' ]
+            expect_failure disable
+            [ -f "$MOCK_LOADED" ]
+            cmp "$MOCK_LOG" "$root/log-before-missing-definitions"
+            mv "$root/missing-service" "$definition"
+            mv "$root/missing-timer" "$timer"
+            : > "$MOCK_ENABLED"
+            rm "$MOCK_LOADED"
+            [ "$(run status)" = 'enabled (inactive)' ]
+            : > "$MOCK_LOADED"
+            ;;
+    esac
     # Neither status nor preview can touch descriptor contents or scheduler state.
     cp "$definition" "$root/before"
     cp "$MOCK_LOG" "$root/log-before"

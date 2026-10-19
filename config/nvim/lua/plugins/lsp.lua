@@ -7,17 +7,8 @@ local desired_servers = {
     "clangd",
 }
 
-local function supports_current_platform(package_name)
-    local has_platform, platform = pcall(require, "mason-core.platform")
-    local has_registry, registry = pcall(require, "mason-registry")
-
-    if not has_platform or not has_registry or not registry.has_package(package_name) then
-        return true
-    end
-
-    local package = registry.get_package(package_name)
+local function supports_current_platform(package, platform)
     local supported_platforms = vim.tbl_get(package, "spec", "source", "supported_platforms")
-
     if type(supported_platforms) ~= "table" or vim.tbl_isempty(supported_platforms) then
         return true
     end
@@ -31,74 +22,84 @@ local function supports_current_platform(package_name)
     return false
 end
 
-local function resolve_servers_for_current_platform(server_names)
-    local has_mappings, mappings = pcall(require, "mason-lspconfig.mappings")
-
-    if not has_mappings then
-        local fallback_servers = {}
-        for _, server_name in ipairs(server_names) do
-            fallback_servers[server_name] = {}
-        end
-        return server_names, fallback_servers
-    end
-
-    local lspconfig_to_package = mappings.get_mason_map().lspconfig_to_package
+local function resolve_servers_for_current_platform(registry)
+    local lspconfig_to_package = require("mason-lspconfig.mappings").get_mason_map().lspconfig_to_package
+    local platform = require("mason-core.platform")
     local ensure_installed = {}
     local servers = {}
+    local unavailable = {}
 
-    for _, server_name in ipairs(server_names) do
+    for _, server_name in ipairs(desired_servers) do
         local package_name = lspconfig_to_package[server_name]
+        local package
+        if package_name and registry.has_package(package_name) then
+            package = registry.get_package(package_name)
+        end
 
-        if not package_name or supports_current_platform(package_name) then
+        if package and supports_current_platform(package, platform) then
             ensure_installed[#ensure_installed + 1] = server_name
             servers[server_name] = {}
+        else
+            unavailable[#unavailable + 1] = server_name
         end
+    end
+
+    if #unavailable > 0 then
+        vim.notify(
+            "Skipping LSP servers without an available Mason package for this platform: "
+                .. table.concat(unavailable, ", "),
+            vim.log.levels.WARN
+        )
     end
 
     return ensure_installed, servers
 end
 
-local ensure_installed, servers = resolve_servers_for_current_platform(desired_servers)
+local function configure_lsp(servers)
+    for server_name, server_config in pairs(servers) do
+        vim.lsp.config(server_name, server_config)
+    end
+
+    local group = vim.api.nvim_create_augroup("LspKeymaps", { clear = true })
+    vim.api.nvim_create_autocmd("LspAttach", {
+        group = group,
+        callback = function(event)
+            local map_opts = { buffer = event.buf, silent = true }
+            vim.keymap.set("n", "K", vim.lsp.buf.hover, map_opts)
+            vim.keymap.set("n", "gd", vim.lsp.buf.definition, map_opts)
+            vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, map_opts)
+        end,
+    })
+end
 
 return {
-    -- mason: LSP 서버 설치
     {
         "mason-org/mason.nvim",
-        opts = {}
+        opts = {},
     },
-
-    -- mason-lsconfig: mason 과 nvim-lspconfig 연결
     {
         "mason-org/mason-lspconfig.nvim",
-        dependencies = { "mason-org/mason.nvim" },
-        opts = {
-            ensure_installed = ensure_installed,
-            automatic_enable = false,
-        },
-    },
+        dependencies = { "mason-org/mason.nvim", "neovim/nvim-lspconfig" },
+        config = function()
+            local registry = require("mason-registry")
+            registry.refresh(function(success)
+                if not success then
+                    vim.notify(
+                        "Mason registry refresh failed; checking available cached packages.",
+                        vim.log.levels.WARN
+                    )
+                end
 
-    -- nvim-lspconfig: LSP 설정
+                local ensure_installed, servers = resolve_servers_for_current_platform(registry)
+                configure_lsp(servers)
+                require("mason-lspconfig").setup({
+                    ensure_installed = ensure_installed,
+                    automatic_enable = ensure_installed,
+                })
+            end)
+        end,
+    },
     {
         "neovim/nvim-lspconfig",
-        opts = {
-            servers = servers
-        },
-        config = function(_, opts)
-            for server_name, server_config in pairs(opts.servers) do
-                vim.lsp.config(server_name, server_config)
-                vim.lsp.enable(server_name)
-            end
-
-            local group = vim.api.nvim_create_augroup("LspKeymaps", { clear = true })
-            vim.api.nvim_create_autocmd("LspAttach", {
-                group = group,
-                callback = function(event)
-                    local map_opts = { buffer = event.buf, silent = true }
-                    vim.keymap.set("n", "K", vim.lsp.buf.hover, map_opts)
-                    vim.keymap.set("n", "gd", vim.lsp.buf.definition, map_opts)
-                    vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, map_opts)
-                end,
-            })
-        end,
-    }
+    },
 }

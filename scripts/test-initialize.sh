@@ -1,5 +1,8 @@
 #!/bin/sh
 set -eu
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS XDG_CONFIG_HOME
+GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_NOSYSTEM
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT HUP INT TERM
@@ -70,6 +73,22 @@ set -- "$root/mac"/.dotfiles-backups/*
 [ "$(cat "$1/.zshrc")" = 'previous zsh' ]
 [ "$(cat "$1/.config/nvim/local.txt")" = 'local nvim' ]
 [ "$(cat "$1/.config/ghostty/config")" = 'old ghostty' ]
+
+# An absolute XDG config root outside HOME owns both editor targets and backups.
+custom_home="$root/custom-xdg-home"
+custom_config="$root/custom-xdg-config"
+mkdir -p "$custom_home" "$custom_config/nvim" "$custom_config/ghostty"
+printf 'custom nvim\n' > "$custom_config/nvim/local.txt"
+printf 'custom ghostty\n' > "$custom_config/ghostty/config"
+MOCK_OS=Darwin TEST_LOG="$root/custom-xdg-preferences" HOME="$custom_home" XDG_CONFIG_HOME="$custom_config" SHELL=/bin/bash "$repo/initialize.sh" --no-packages --no-auto-update > "$root/custom-xdg-run"
+[ "$(readlink "$custom_config/nvim")" = "$repo/config/nvim" ]
+[ "$(readlink "$custom_config/ghostty/config")" = "$repo/config/ghostty/config" ]
+[ ! -e "$custom_home/.config" ]
+set -- "$custom_home"/.dotfiles-backups/*
+[ "$#" -eq 1 ]
+[ "$(cat "$1$custom_config/nvim/local.txt")" = 'custom nvim' ]
+[ "$(cat "$1$custom_config/ghostty/config")" = 'custom ghostty' ]
+
 MOCK_APPLIED=1 TEST_LOG="$root/unchanged" HOME="$root/mac" SHELL=/bin/fish "$repo/initialize.sh" --no-packages --no-auto-update > "$root/rerun"
 set -- "$root/mac"/.dotfiles-backups/*
 [ "$#" -eq 1 ]
@@ -118,6 +137,11 @@ if MOCK_OS=Linux HOME="$root/invalid" "$repo/initialize.sh" --homebrew --no-pack
     exit 1
 fi
 [ ! -e "$root/invalid" ]
+if MOCK_OS=Darwin HOME="$root/relative-xdg-home" XDG_CONFIG_HOME=relative-config "$repo/initialize.sh" --no-packages --no-auto-update > "$root/error" 2>&1; then
+    printf 'Relative XDG_CONFIG_HOME should fail\n' >&2
+    exit 1
+fi
+[ ! -e "$root/relative-xdg-home" ]
 
 bash --noprofile -c '. "$1"; alias gmg >/dev/null; ! alias gm >/dev/null 2>&1' _ "$repo/shell/common.sh"
 if command -v zsh >/dev/null 2>&1; then

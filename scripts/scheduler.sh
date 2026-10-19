@@ -53,15 +53,38 @@ check_owned() {
         owned "$1" || fail "refusing to modify unmanaged definition: $1"
     fi
 }
-is_enabled() {
+is_active() {
     case "$os" in
         Darwin) launchctl print "$domain/$label" >/dev/null 2>/dev/null;;
-        Linux) systemctl --user is-enabled --quiet dotfiles-update.timer >/dev/null 2>/dev/null &&
-            systemctl --user is-active --quiet dotfiles-update.timer >/dev/null 2>/dev/null;;
+        Linux) systemctl --user is-active --quiet dotfiles-update.timer >/dev/null 2>/dev/null;;
+    esac
+}
+is_registered() {
+    case "$os" in
+        Darwin) is_active;;
+        Linux) systemctl --user is-enabled --quiet dotfiles-update.timer >/dev/null 2>/dev/null;;
+    esac
+}
+is_enabled() {
+    case "$os" in
+        Darwin) is_active;;
+        Linux)
+            if is_registered; then registered=1; else registered=0; fi
+            if is_active; then active=1; else active=0; fi
+            [ "$registered" -eq 1 ] && [ "$active" -eq 1 ]
+            ;;
     esac
 }
 if [ "$action" = status ]; then
-    if is_enabled; then printf 'enabled\n'; else printf 'disabled\n'; fi
+    if is_enabled; then
+        printf 'enabled\n'
+    elif is_active; then
+        printf 'active (not enabled)\n'
+    elif is_registered; then
+        printf 'enabled (inactive)\n'
+    else
+        printf 'disabled\n'
+    fi
     exit 0
 fi
 check_owned "$definition"
@@ -74,8 +97,10 @@ if [ "$action" = disable ]; then
     case "$os" in
         Darwin)
             if [ -f "$definition" ]; then
-                if is_enabled; then launchctl bootout "$domain/$label"; fi
+                if is_active; then launchctl bootout "$domain/$label"; fi
                 rm -f "$definition"
+            elif is_active; then
+                fail "refusing to leave loaded scheduler without generated definition: $definition"
             fi
             ;;
         Linux)
@@ -83,9 +108,14 @@ if [ "$action" = disable ]; then
                 systemctl --user disable --now dotfiles-update.timer
                 rm -f "$definition" "$timer"
                 systemctl --user daemon-reload
+            elif is_registered || is_active; then
+                fail 'refusing to leave scheduler registered without generated definitions'
             fi
             ;;
     esac
+    if is_active || is_registered; then
+        fail 'scheduler remains active or registered after disable; inspect the native user manager'
+    fi
     printf 'disabled\n'
     exit 0
 fi
@@ -137,9 +167,7 @@ $marker_line
 </dict></plist>
 EOF
         install_definition "$definition"
-        if is_enabled; then
-            if [ "$changed" -eq 1 ]; then launchctl bootout "$domain/$label"; else printf 'enabled\n'; exit 0; fi
-        fi
+        if is_active; then launchctl bootout "$domain/$label"; fi
         launchctl enable "$domain/$label"
         launchctl bootstrap "$domain" "$definition"
         ;;

@@ -50,6 +50,11 @@ if [ "$with_brew" -eq 1 ]; then
         exit 1
     }
 fi
+config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
+case "$config_dir" in
+    /*) ;;
+    *) printf 'XDG_CONFIG_HOME must be an absolute path\n' >&2; exit 2 ;;
+esac
 printf 'Platform: %s; shell config: %s\n' "$os" "$mode"
 
 if [ "$with_tools" -eq 1 ]; then
@@ -105,9 +110,9 @@ case "$mode" in
     zsh) link_config "$repo/shell/zshrc" "$HOME/.zshrc" ;;
     bash) link_config "$repo/shell/bashrc" "$HOME/.bashrc" ;;
 esac
-link_config "$repo/config/nvim" "$HOME/.config/nvim"
+link_config "$repo/config/nvim" "$config_dir/nvim"
 if [ "$os" = Darwin ]; then
-    link_config "$repo/config/ghostty/config" "$HOME/.config/ghostty/config"
+    link_config "$repo/config/ghostty/config" "$config_dir/ghostty/config"
 fi
 
 if [ "$with_brew" -eq 1 ]; then

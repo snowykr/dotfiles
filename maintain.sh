@@ -7,6 +7,11 @@ case "$state_dir" in
     /*) ;;
     *) printf 'XDG_STATE_HOME must be an absolute path\n' >&2; exit 2 ;;
 esac
+# Reject parent traversal before resolving missing ancestors: lexical normalization
+# could otherwise expose a symlink that has not been physically resolved.
+case "$state_dir" in
+    */../*|*/..) printf 'Maintenance state path must not contain parent traversal\n' >&2; exit 2 ;;
+esac
 # Resolve existing parent symlinks without creating anything, including on previews.
 # This also catches /var vs /private/var and symlinked XDG paths into the checkout.
 state_parent=$state_dir
@@ -299,7 +304,7 @@ status() {
             ''|*[!0-9]*) printf 'Update lock has no valid owner: %s\n' "$lock_dir" ;;
             *)
                 if kill -0 "$owner" 2>/dev/null; then
-                    printf 'Update running: PID %s\n' "$owner"
+                    printf 'Update lock records existing PID %s; confirm updater ownership before removing the lock.\n' "$owner"
                 else
                     printf 'Stale update lock: %s (PID %s no longer exists)\n' "$lock_dir" "$owner"
                     printf 'Remove this lock directory after confirming no update is running.\n'

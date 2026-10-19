@@ -9,7 +9,7 @@ Two entrypoints have separate responsibilities:
 
 ## Initialize
 
-This repository is private. Install [Homebrew](https://brew.sh/) and run `brew install gh` on macOS, or run `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu.
+This repository is private. Install [Homebrew](https://brew.sh/) and run `brew install gh` on macOS, or run `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu. Prepare the editor prerequisites listed below before running initialization.
 
 ```sh
 gh auth login --hostname github.com --git-protocol https --web
@@ -31,9 +31,13 @@ Initialization detects the OS with `uname -s`, independently of the current logi
 | CLI installation | Homebrew | apt-get (Ubuntu/Debian) + official Starship installer |
 | Automatic maintenance | User LaunchAgent | systemd user service and timer |
 
-Missing CLI tools are installed: Neovim, ripgrep, fd, Starship, eza, gh, and lsof. Package names are mapped to executables (`neovim` → `nvim`, `ripgrep` → `rg`); Linux uses `fd-find` → `fdfind`. macOS zsh settings resolve the Homebrew prefix for Apple Silicon and Intel Macs.
+The bundled editor configuration requires **Neovim 0.12 or newer**. On Linux, install a compatible [official Neovim build](https://github.com/neovim/neovim/releases) before initialization; distribution packages such as Ubuntu 24.04's Neovim 0.9.5 are too old. On macOS, missing Neovim is installed through Homebrew; upgrade an existing outdated installation first.
 
-Git identity is set to `snowykr` / `snowykr22@gmail.com`. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
+Editor setup also requires Node.js **22.22.2 or newer** with npm (for the current TypeScript language server), Go, a C compiler (`cc`), and [tree-sitter-cli](https://github.com/tree-sitter/tree-sitter/releases) 0.26.1 or newer for automatic language-server/parser installation. Download/extraction tools `curl`, `tar`, `unzip`, and `gzip` must also be available. Install these development prerequisites before initialization (on macOS, Homebrew provides `node`, `go`, and `tree-sitter-cli`; Apple's Command Line Tools provide `cc`). Tool preflight rejects missing or incompatible prerequisites instead of linking a known-broken editor setup. `--no-packages` skips tool installation/preflight and leaves these requirements to you.
+
+Missing remaining CLI tools are installed: ripgrep, fd, Starship, eza, gh, and lsof. Package names are mapped to executables (`ripgrep` → `rg`); Linux uses `fd-find` → `fdfind`. Linux package availability is checked before the install batch; releases without a required package (for example, Ubuntu 22.04 without eza) require manually installing it or using a newer release. macOS zsh settings resolve the Homebrew prefix for Apple Silicon and Intel Macs.
+
+Git identity is set to `snowykr` / `snowykr22@gmail.com`. Application configuration is linked under `${XDG_CONFIG_HOME:-$HOME/.config}`; a custom configuration root must be absolute. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
 
 After successful initialization, automatic maintenance is registered for a `main` checkout with an `origin` remote. Registration is skipped on development branches. Private-repository credentials must work without a terminal prompt; authentication is not performed by a scheduled job.
 
@@ -80,11 +84,13 @@ Updates operate on the actual installed repository path, not a hardcoded `~/.dot
 - Concurrent updates: only one obtains the update lock.
 - Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching.
 
-There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it.
+There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations, but this is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
 
 Logs and the update lock live outside the repository at `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles`. Update and macOS scheduler logs rotate at 64 KiB, keeping one previous file. If an updater is force-killed or the machine loses power, `status` can report a stale lock. Confirm no update is running before removing the reported `update.lock` directory; maintenance does not steal a lock from another process.
 
 Keep machine-specific shell changes in `~/.zshrc.local` or `~/.bashrc.local` rather than editing the tracked files.
+
+The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Maintenance never discards plugin-lock changes for you.
 
 ### Scheduling
 
@@ -122,6 +128,7 @@ sh scripts/test-initialize.sh
 sh scripts/test-maintain.sh
 sh scripts/test-scheduler.sh
 sh scripts/test-install-tools.sh
+nvim --headless -u NONE -l scripts/test-nvim.lua
 ```
 
 Tests use temporary Git repositories and mock both operating systems, package managers, preference/power writes and scheduler commands. They do not install packages, register real jobs or change host preferences.
