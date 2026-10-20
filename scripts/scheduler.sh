@@ -36,8 +36,9 @@ case "$os" in
         ;;
     Linux)
         command -v systemctl >/dev/null || fail 'systemctl is unavailable'
-        systemctl --user show-environment >/dev/null 2>/dev/null || fail 'native systemd user manager is unavailable'
-        directory=$config/systemd/user
+        command -v busctl >/dev/null || fail 'busctl is unavailable'
+        systemctl --user show-environment >/dev/null || fail 'native systemd user manager is unavailable'
+        directory=$state/systemd
         definition=$directory/dotfiles-update.service
         timer=$directory/dotfiles-update.timer
         ;;
@@ -56,13 +57,13 @@ check_owned() {
 is_active() {
     case "$os" in
         Darwin) launchctl print "$domain/$label" >/dev/null 2>/dev/null;;
-        Linux) systemctl --user is-active --quiet dotfiles-update.timer >/dev/null 2>/dev/null;;
+        Linux) systemctl --user is-active --quiet dotfiles-update.timer >/dev/null;;
     esac
 }
 is_registered() {
     case "$os" in
         Darwin) is_active;;
-        Linux) systemctl --user is-enabled --quiet dotfiles-update.timer >/dev/null 2>/dev/null;;
+        Linux) systemctl --user is-enabled --quiet dotfiles-update.timer >/dev/null;;
     esac
 }
 is_enabled() {
@@ -74,6 +75,32 @@ is_enabled() {
             [ "$registered" -eq 1 ] && [ "$active" -eq 1 ]
             ;;
     esac
+}
+manager_fragment() {
+    manager_fragment_output=$(systemctl --user show --property=FragmentPath --value "$1" && printf '.') || fail "could not inspect systemd unit: $1"
+    case "$manager_fragment_output" in *.) manager_fragment_output=${manager_fragment_output%.};; *) fail "invalid FragmentPath response for $1";; esac
+    case "$manager_fragment_output" in *'
+') manager_fragment_output=${manager_fragment_output%?};; esac
+    case "$manager_fragment_output" in *'
+'*) fail "FragmentPath response is not scalar for $1";; esac
+    printf '%s' "$manager_fragment_output"
+}
+validate_manager_fragment() {
+    unit=$1
+    fragment=$2
+    source=$3
+    [ -n "$fragment" ] || return 0
+    case "$fragment" in /*) ;; *) fail "systemd unit $unit has a non-absolute FragmentPath";; esac
+    owned "$source" || fail "systemd unit $unit has a fragment without its owned source"
+    expected_path=$(readlink -f -- "$source") || fail "could not resolve owned systemd source: $source"
+    actual_path=$(readlink -f -- "$fragment") || fail "could not resolve systemd FragmentPath for $unit"
+    [ "$actual_path" = "$expected_path" ] || fail "refusing foreign systemd unit fragment: $unit ($fragment)"
+}
+load_manager_fragments() {
+    service_fragment=$(manager_fragment dotfiles-update.service)
+    timer_fragment=$(manager_fragment dotfiles-update.timer)
+    validate_manager_fragment dotfiles-update.service "$service_fragment" "$definition"
+    validate_manager_fragment dotfiles-update.timer "$timer_fragment" "$timer"
 }
 if [ "$action" = status ]; then
     if is_enabled; then
@@ -93,6 +120,7 @@ if [ "$dry_run" -eq 1 ]; then
     printf 'Would %s %s scheduler: /bin/sh %s/maintain.sh update (state: %s)\n' "$action" "$os" "$repo" "$state"
     exit 0
 fi
+if [ "$os" = Linux ] && [ "$action" = enable ]; then load_manager_fragments; fi
 if [ "$action" = disable ]; then
     case "$os" in
         Darwin)
@@ -104,12 +132,38 @@ if [ "$action" = disable ]; then
             fi
             ;;
         Linux)
-            if [ -f "$definition" ] || [ -f "$timer" ]; then
-                systemctl --user disable --now dotfiles-update.timer
+            # FragmentPath describes a loaded unit, not necessarily the files now
+            # on disk. Refresh before authorizing any name-based removal.
+            if [ -f "$definition" ] || [ -f "$timer" ] || is_active || is_registered; then
+                systemctl --user daemon-reload >/dev/null
+            fi
+            load_manager_fragments
+            if is_active; then timer_active=1; else timer_active=0; fi
+            if is_registered; then timer_registered=1; else timer_registered=0; fi
+            if [ -z "$timer_fragment" ] && { [ "$timer_active" -eq 1 ] || [ "$timer_registered" -eq 1 ]; }; then
+                fail 'refusing to stop or unregister a timer without an owned manager fragment'
+            fi
+            if [ "$timer_active" -eq 1 ]; then systemctl --user stop dotfiles-update.timer >/dev/null; fi
+            manager_changed=0
+            if [ -n "$service_fragment" ] && [ -n "$timer_fragment" ]; then
+                manager_changed=1
+                busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager DisableUnitFiles asb 2 dotfiles-update.service dotfiles-update.timer false >/dev/null
+            elif [ -n "$service_fragment" ]; then
+                manager_changed=1
+                busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager DisableUnitFiles asb 1 dotfiles-update.service false >/dev/null
+            elif [ -n "$timer_fragment" ]; then
+                manager_changed=1
+                busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager DisableUnitFiles asb 1 dotfiles-update.timer false >/dev/null
+            fi
+            if [ "$manager_changed" -eq 1 ]; then
+                systemctl --user daemon-reload >/dev/null
+                load_manager_fragments
+            fi
+            if [ -z "$service_fragment" ] && [ -z "$timer_fragment" ] && { [ -e "$definition" ] || [ -L "$definition" ] || [ -e "$timer" ] || [ -L "$timer" ]; }; then
                 rm -f "$definition" "$timer"
-                systemctl --user daemon-reload
-            elif is_registered || is_active; then
-                fail 'refusing to leave scheduler registered without generated definitions'
+                systemctl --user daemon-reload >/dev/null
+                load_manager_fragments
+                [ -z "$service_fragment" ] && [ -z "$timer_fragment" ] || fail 'systemd unit fragments remain after source cleanup'
             fi
             ;;
     esac
@@ -197,9 +251,14 @@ Persistent=true
 WantedBy=timers.target
 EOF
         install_definition "$timer"
-        if [ "$changed" -eq 1 ]; then systemctl --user daemon-reload; fi
-        systemctl --user enable --now dotfiles-update.timer
-        if [ "$changed" -eq 1 ]; then systemctl --user restart dotfiles-update.timer; fi
+        busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager LinkUnitFiles asbb 2 "$definition" "$timer" false false >/dev/null
+        systemctl --user daemon-reload >/dev/null
+        load_manager_fragments
+        [ -n "$service_fragment" ] && [ -n "$timer_fragment" ] || fail 'systemd manager did not resolve both linked unit sources'
+        busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager EnableUnitFiles asbb 1 dotfiles-update.timer false false >/dev/null
+        systemctl --user daemon-reload >/dev/null
+        systemctl --user start dotfiles-update.timer >/dev/null
+        if [ "$changed" -eq 1 ]; then systemctl --user restart dotfiles-update.timer >/dev/null; fi
         ;;
 esac
 is_enabled || fail 'scheduler registration did not become enabled'

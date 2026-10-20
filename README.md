@@ -75,7 +75,7 @@ To review or apply macOS preferences separately:
 
 ### Update safety
 
-Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. Only a clean `main` checkout can fast-forward to `origin/main`.
+Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. Fast-forward eligibility requires a clean `main` checkout targeting `origin/main`.
 
 - Modified, staged or untracked files: skip without changing local work.
 - Development branch, detached HEAD or an in-progress Git operation: skip.
@@ -83,6 +83,8 @@ Updates operate on the actual installed repository path, not a hardcoded `~/.dot
 - Network/authentication failure: record an error and retry at the next scheduled run.
 - Concurrent updates: only one obtains the update lock.
 - Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching.
+
+The update lock serializes maintenance runs, **not interactive Git commands**. Branch checks and Git's checkout/ref mutation are not atomic: a same-commit branch switch in the final check-to-merge window can still advance the other branch. This is a concurrency limitation, not a guaranteed safe skip. Disable scheduling and confirm no update is running before changing branches in the installed checkout; use a separate clone for development.
 
 There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations, but this is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
 
@@ -95,7 +97,9 @@ The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and i
 ### Scheduling
 
 - **macOS:** `com.snowykr.dotfiles.update` user LaunchAgent, every hour at minutes 00, 15, 30 and 45. Missed calendar events are coalesced after waking. No KeepAlive process or wake schedule is installed.
-- **Linux:** `dotfiles-update.service` and `.timer` in the systemd user manager, every 15 minutes with `Persistent=true`. Missed calendar runs are caught up when the timer is activated. A working systemd user manager is required; unsupported systems fail explicitly rather than silently installing a different scheduler. User-manager lifetime determines whether it runs while logged out.
+- **Linux:** `dotfiles-update.service` and `.timer` in the systemd user manager, every 15 minutes with `Persistent=true`. Missed calendar runs are caught up when the timer is activated. A reachable systemd user manager, `systemctl`, and `busctl` are required; unsupported systems fail explicitly rather than silently installing a different scheduler. User-manager lifetime determines whether it runs while logged out.
+
+Linux keeps owned unit source files under the maintenance state directory's `systemd/` subdirectory. Registration uses the running manager's D-Bus unit-file methods to create persistent links in **that manager's** configuration directory, not the invoking shell's unit search path. A one-off caller `XDG_CONFIG_HOME` is preserved in the scheduled service environment without needing to match the manager's startup environment. Disable removes the timer registration and both manager links, without stopping an already-running update service. Disable the existing registration using its original state directory before changing `XDG_STATE_HOME`; conflicting unit names or foreign manager definitions are never overwritten.
 
 Both schedule `/bin/sh <installed-repo>/maintain.sh update`, without sudo. Absolute paths and an explicit PATH are registered because schedulers do not load `.zshrc` or `.bashrc`. `maintain.sh enable` refreshes definitions after scheduler-related changes.
 
