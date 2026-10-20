@@ -2,65 +2,137 @@
 
 Personal shell, editor, terminal, and platform-aware macOS/Linux setup.
 
-## Install
+Two entrypoints have separate responsibilities:
 
-This repository is private. Install [Homebrew](https://brew.sh/) and run `brew install gh` on macOS, or run `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu.
+- **`initialize.sh` configures the computer.** Run it on a new machine or to reapply installation changes.
+- **`maintain.sh` keeps the installed checkout up to date.** It never runs initialization, installs packages, changes Git identity, applies macOS preferences, or invokes sudo.
+
+## Initialize
+
+This repository is private. Install [Homebrew](https://brew.sh/) and run `brew install gh` on macOS, or run `sudo apt-get update && sudo apt-get install -y gh` on Ubuntu. Prepare the editor prerequisites listed below before running initialization.
 
 ```sh
 gh auth login --hostname github.com --git-protocol https --web
 gh auth setup-git
 gh repo clone snowykr/dotfiles "$HOME/.dotfiles"
-"$HOME/.dotfiles/install.sh" --dry-run
-"$HOME/.dotfiles/install.sh"
+"$HOME/.dotfiles/initialize.sh" --dry-run
+"$HOME/.dotfiles/initialize.sh"
 ```
 
-The installer detects the OS with `uname -s` and selects configuration independently of the current login shell:
+Initialization detects the OS with `uname -s`, independently of the current login shell:
 
 | Setting | macOS | Linux |
 | --- | --- | --- |
 | Shell configuration | `~/.zshrc` | `~/.bashrc` |
 | Neovim configuration | Linked | Linked |
 | Ghostty configuration | Linked | Unchanged |
-| Appearance, Dock, Finder | Applied automatically | Skipped |
-| System/display automatic sleep | Disabled on all power sources | Unchanged |
+| Appearance, clock, Dock, Finder | Applied | Skipped |
+| System/display idle sleep | Disabled on all power sources | Unchanged |
 | CLI installation | Homebrew | apt-get (Ubuntu/Debian) + official Starship installer |
+| Automatic maintenance | User LaunchAgent | systemd user service and timer |
 
-Missing CLI tools are installed: Neovim, ripgrep, fd, Starship, eza, gh, and lsof. Package names are mapped to their executables (`neovim` → `nvim`, `ripgrep` → `rg`); Linux uses `fd-find` → `fdfind`. macOS zsh settings resolve the Homebrew prefix for both Apple Silicon and Intel Macs.
+The bundled editor configuration requires **Neovim 0.12 or newer**. On Linux, install a compatible [official Neovim build](https://github.com/neovim/neovim/releases) before initialization; distribution packages such as Ubuntu 24.04's Neovim 0.9.5 are too old. On macOS, missing Neovim is installed through Homebrew; upgrade an existing outdated installation first.
 
-Git identity is set to `snowykr` / `snowykr22@gmail.com`. Existing files are backed up under `~/.dotfiles-backups/`. Repeated installs leave matching symlinks and preferences unchanged. `--dry-run` previews changes without applying them.
+Editor setup also requires Node.js **22.22.2 or newer** with npm (for the current TypeScript language server), Go, a C compiler (`cc`), and [tree-sitter-cli](https://github.com/tree-sitter/tree-sitter/releases) 0.26.1 or newer for automatic language-server/parser installation. Download/extraction tools `curl`, `tar`, `unzip`, and `gzip` must also be available. Install these development prerequisites before initialization (on macOS, Homebrew provides `node`, `go`, and `tree-sitter-cli`; Apple's Command Line Tools provide `cc`). Tool preflight rejects missing or incompatible prerequisites instead of linking a known-broken editor setup. `--no-packages` skips tool installation/preflight and leaves these requirements to you.
+
+Missing remaining CLI tools are installed: ripgrep, fd, Starship, eza, gh, and lsof. Package names are mapped to executables (`ripgrep` → `rg`); Linux uses `fd-find` → `fdfind`. Linux package availability is checked before the install batch; releases without a required package (for example, Ubuntu 22.04 without eza) require manually installing it or using a newer release. macOS zsh settings resolve the Homebrew prefix for Apple Silicon and Intel Macs.
+
+Git identity is set to `snowykr` / `snowykr22@gmail.com`. Application configuration is linked under `${XDG_CONFIG_HOME:-$HOME/.config}`; a custom configuration root must be absolute. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
+
+After successful initialization, automatic maintenance is registered for a `main` checkout with an `origin` remote. Registration is skipped on development branches. Private-repository credentials must work without a terminal prompt; authentication is not performed by a scheduled job.
 
 Options:
 
-- `--no-packages`: skip CLI installation. On Linux distributions without apt-get, install the listed tools manually and use this option.
-- `--no-macos`: leave macOS appearance, clock, Dock, Finder, and power settings unchanged.
+- `--dry-run`: preview without changing files, preferences, Git configuration or scheduler registration.
+- `--no-auto-update`: do not register automatic maintenance.
+- `--no-packages`: skip CLI installation. On distributions without apt-get, install the listed tools manually and use this option.
+- `--no-macos`: leave macOS appearance, clock, Dock, Finder and power settings unchanged.
 - `--shell zsh|bash`: override the OS-selected shell configuration.
-- `--homebrew`: additionally install macOS apps and fonts from `Brewfile` (macOS only).
+- `--homebrew`: additionally install macOS apps and fonts from `Brewfile`.
 
-The installer links shell configuration but does **not** change the login shell with `chsh`. Open a matching shell or source its configuration after installation.
+macOS preferences include Dark appearance, a digital 24-hour clock with seconds and no AM/PM label, an auto-hiding Dock, and Finder path/file-extension display. Clock date/day options are preserved. Clock changes restart ControlCenter.
 
-macOS preferences include Dark appearance, system-default appearance overrides, a digital 24-hour menu bar clock with seconds (no AM/PM label), an auto-hiding Dock, and Finder path/file-extension display. Existing clock date/day display options are preserved; clock changes restart ControlCenter to refresh the menu bar. To review or apply just those preferences:
+Power setup uses `sudo pmset -a sleep 0 displaysleep 0` only when a power profile differs. This disables idle timers, **not** loginwindow's explicit display-off requests when locking. A dark screen does not prove that the system is asleep. Closing the lid, choosing Sleep or exhausting the battery can still suspend the Mac. Keeping the screen on increases battery use; connect power for long-running work. `caffeinate -di` can hold temporary display/system idle-sleep assertions when needed; initialization does not install an always-running caffeinate process.
+
+To review or apply macOS preferences separately:
 
 ```sh
 "$HOME/.dotfiles/scripts/macos-defaults.sh" --dry-run
 "$HOME/.dotfiles/scripts/macos-defaults.sh"
 ```
 
-macOS setup also disables automatic system and display sleep on battery and external power (`sudo pmset -a sleep 0 displaysleep 0`). This disables idle sleep timers; it does not prevent loginwindow from explicitly turning off the display when locking. A dark lock screen is not evidence that the system has slept. Lock-screen display behavior must be verified separately on the target Mac. Power settings are checked first: `--dry-run` never invokes sudo, and already configured Macs do not need sudo for this step. Applying a power change requires administrator authentication; other power settings and lock-screen authentication are unchanged. Closing the lid, explicitly choosing Sleep, or running out of battery can still suspend the Mac. Keeping the display on increases battery use; connect power for long-running work.
+## Maintain
 
-To install macOS apps as well, run `"$HOME/.dotfiles/install.sh" --homebrew`. Linux never runs macOS preference commands.
+```sh
+"$HOME/.dotfiles/maintain.sh" update           # Update now
+"$HOME/.dotfiles/maintain.sh" update --dry-run # Inspect eligibility without fetching
+"$HOME/.dotfiles/maintain.sh" status           # Checkout, scheduling and recent results
+"$HOME/.dotfiles/maintain.sh" enable           # Enable or refresh automatic maintenance
+"$HOME/.dotfiles/maintain.sh" disable          # Disable automatic maintenance
+```
+
+`enable` and `disable` also accept `--dry-run`. `status` is read-only and uses the cached `origin/main`; it does not contact the remote. A dry-run update does not fetch or modify refs, logs or locks.
+
+### Update safety
+
+Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. Fast-forward eligibility requires a clean `main` checkout targeting `origin/main`.
+
+- Modified, staged or untracked files: skip without changing local work.
+- Development branch, detached HEAD or an in-progress Git operation: skip.
+- Local commits ahead of or diverged from upstream, including upstream rewrites: skip.
+- Network/authentication failure: record an error and retry at the next scheduled run.
+- Concurrent updates: only one obtains the update lock.
+- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching.
+
+The update lock serializes maintenance runs, **not interactive Git commands**. Branch checks and Git's checkout/ref mutation are not atomic: a same-commit branch switch in the final check-to-merge window can still advance the other branch. This is a concurrency limitation, not a guaranteed safe skip. Disable scheduling and confirm no update is running before changing branches in the installed checkout; use a separate clone for development.
+
+There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations, but this is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
+
+Logs and the update lock live outside the repository at `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles`. Update and macOS scheduler logs rotate at 64 KiB, keeping one previous file. If an updater is force-killed or the machine loses power, `status` can report a stale lock. Confirm no update is running before removing the reported `update.lock` directory; maintenance does not steal a lock from another process.
+
+Keep machine-specific shell changes in `~/.zshrc.local` or `~/.bashrc.local` rather than editing the tracked files.
+
+The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Maintenance never discards plugin-lock changes for you.
+
+### Scheduling
+
+- **macOS:** `com.snowykr.dotfiles.update` user LaunchAgent, every hour at minutes 00, 15, 30 and 45. Missed calendar events are coalesced after waking. No KeepAlive process or wake schedule is installed.
+- **Linux:** `dotfiles-update.service` and `.timer` in the systemd user manager, every 15 minutes with `Persistent=true`. Missed calendar runs are caught up when the timer is activated. A reachable systemd user manager, `systemctl`, and `busctl` are required; unsupported systems fail explicitly rather than silently installing a different scheduler. User-manager lifetime determines whether it runs while logged out.
+
+Linux keeps owned unit source files under the maintenance state directory's `systemd/` subdirectory. Registration uses the running manager's D-Bus unit-file methods to create persistent links in **that manager's** configuration directory, not the invoking shell's unit search path. A one-off caller `XDG_CONFIG_HOME` is preserved in the scheduled service environment without needing to match the manager's startup environment. Disable removes the timer registration and both manager links, without stopping an already-running update service. Disable the existing registration using its original state directory before changing `XDG_STATE_HOME`; conflicting unit names or foreign manager definitions are never overwritten.
+
+Both schedule `/bin/sh <installed-repo>/maintain.sh update`, without sudo. Absolute paths and an explicit PATH are registered because schedulers do not load `.zshrc` or `.bashrc`. `maintain.sh enable` refreshes definitions after scheduler-related changes.
+
+### Receiving changes versus applying installation changes
+
+| Remote change | Action |
+| --- | --- |
+| Existing aliases or shell configuration | Download automatically; open a new shell or source its config |
+| Existing Neovim/Ghostty configuration | Download automatically; reload/restart the app as needed |
+| New configuration links | Run `initialize.sh` again |
+| New packages or apps | Run `initialize.sh` again |
+| macOS system preferences | Run `initialize.sh` again |
+| Scheduler definitions | Run `maintain.sh enable` again |
+
+The maintenance command never calls initialization after updating. Updating linked files does not forcibly reload running shells or applications.
 
 ## Contents
 
-- `shell/` — zsh, bash, and shared shell settings.
+- `initialize.sh` / `maintain.sh` — the two public entrypoints.
+- `shell/` — zsh, bash and shared shell settings.
 - `config/` — Ghostty and Neovim settings.
 - `Brewfile` — macOS apps and CLI dependencies.
-- `scripts/` — macOS preferences and installation tests.
+- `scripts/install-tools.sh` / `scripts/macos-defaults.sh` — initialization helpers.
+- `scripts/scheduler.sh` — internal native scheduler backend.
 
 ## Test
 
 ```sh
-sh scripts/test-install.sh
+sh scripts/test-initialize.sh
+sh scripts/test-maintain.sh
+sh scripts/test-scheduler.sh
 sh scripts/test-install-tools.sh
+nvim --headless -u NONE -l scripts/test-nvim.lua
 ```
 
-Tests mock both operating systems, package managers, macOS preference writes, and pmset/sudo; they do not install packages or change host preferences or power settings.
+Tests use temporary Git repositories and mock both operating systems, package managers, preference/power writes and scheduler commands. They do not install packages, register real jobs or change host preferences.
