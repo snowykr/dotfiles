@@ -14,7 +14,7 @@ printf '#!/bin/sh\nexit 0\n' > "$root/tool"
 chmod +x "$root/tool"
 printf '#!/bin/sh\nprintf "tree-sitter %%s\\n" "$MOCK_TREE_SITTER_VERSION"\n' > "$root/bin/tree-sitter"
 printf '#!/bin/sh\nprintf "v%%s\\n" "$MOCK_NODE_VERSION"\n' > "$root/bin/node"
-for tool in npm go cc tar unzip gzip curl; do
+for tool in npm go cc tar unzip gzip; do
     cp "$root/tool" "$root/bin/$tool"
 done
 printf '#!/bin/sh\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    neovim) cp "$MOCK_NVIM" "$MOCK_BIN/nvim";;\n    ripgrep) tool=rg;;\n    *) tool=$2;;\nesac\n[ "$2" = neovim ] || cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\n' > "$root/bin/brew"
@@ -22,7 +22,33 @@ printf '#!/bin/sh\nprintf "sudo %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    u
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$APT_CACHE_LOG"\n[ -e "$APT_UPDATE_MARKER" ] || exit 1\nif [ "$2" = "$MOCK_NO_CANDIDATE" ]; then\n    exit 0\nelse\n    printf "Candidate: 1.0\\n"\nfi\n' > "$root/bin/apt-cache"
 printf '#!/bin/sh\nexit 0\n' > "$root/bin/apt-get"
 printf '#!/bin/sh\nmkdir -p "$HOME/.local/bin"\ncp "$MOCK_TOOL" "$HOME/.local/bin/starship"\n' > "$root/installer"
-printf '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = -o ]; then shift; output=$1; fi\n    shift\ndone\ncp "$MOCK_INSTALLER" "$output"\n' > "$root/curl"
+cat > "$root/tacit-installer" <<'INSTALLER'
+#!/bin/sh
+set -eu
+printf '%s\n' "$0" >> "$TACIT_EXEC_LOG"
+[ "$#" -eq 0 ]
+[ "${MOCK_TACIT_INSTALL_STATUS:-0}" -eq 0 ] || exit "$MOCK_TACIT_INSTALL_STATUS"
+mkdir -p "$HOME/Library/Input Methods/tacit.app" "$HOME/.local/bin"
+cp "$MOCK_TOOL" "$HOME/.local/bin/tacit"
+cp "$MOCK_TOOL" "$HOME/.local/bin/tacit-config"
+INSTALLER
+cat > "$root/curl" <<'CURL'
+#!/bin/sh
+set -eu
+[ "$#" -eq 4 ] && [ "$1" = -fsSL ] && [ "$3" = -o ]
+case "$2" in
+    https://starship.rs/install.sh) cp "$MOCK_INSTALLER" "$4" ;;
+    https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh)
+        printf '%s\n' "$2" >> "$TACIT_DOWNLOAD_LOG"
+        printf '%s\n' "$4" > "$TACIT_PATH_LOG"
+        # A failed transfer may leave partial executable content behind.
+        cp "$MOCK_TACIT_INSTALLER" "$4"
+        exit "${MOCK_TACIT_DOWNLOAD_STATUS:-0}" ;;
+    *) exit 99 ;;
+esac
+CURL
+cp "$root/curl" "$root/bin/curl"
+chmod +x "$root/bin/curl"
 chmod +x "$root/bin/uname" "$root/bin/tree-sitter" "$root/bin/node" "$root/bin/brew" "$root/bin/sudo" "$root/bin/apt-cache" "$root/bin/apt-get" "$root/nvim-tool" "$root/tool" "$root/installer" "$root/curl"
 
 TEST_LOG="$root/log"
@@ -38,6 +64,13 @@ MOCK_OS=Darwin
 MOCK_INSTALLER="$root/installer"
 MOCK_CURL="$root/curl"
 MOCK_NO_CANDIDATE=
+MOCK_TACIT_INSTALLER="$root/tacit-installer"
+TACIT_DOWNLOAD_LOG="$root/tacit-download-log"
+TACIT_EXEC_LOG="$root/tacit-exec-log"
+TACIT_PATH_LOG="$root/tacit-path-log"
+mkdir -p "$root/tmp"
+TMPDIR="$root/tmp"
+export TMPDIR MOCK_TACIT_INSTALLER TACIT_DOWNLOAD_LOG TACIT_EXEC_LOG TACIT_PATH_LOG
 export TEST_LOG APT_CACHE_LOG APT_UPDATE_MARKER MOCK_BIN MOCK_TOOL MOCK_NVIM
 export MOCK_NVIM_VERSION MOCK_NODE_VERSION MOCK_TREE_SITTER_VERSION MOCK_OS MOCK_INSTALLER MOCK_CURL MOCK_NO_CANDIDATE
 
@@ -45,6 +78,12 @@ export MOCK_NVIM_VERSION MOCK_NODE_VERSION MOCK_TREE_SITTER_VERSION MOCK_OS MOCK
 HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/preview"
 [ ! -e "$root/log" ]
 [ ! -e "$root/bin/nvim" ]
+[ ! -e "$TACIT_DOWNLOAD_LOG" ]
+[ ! -e "$TACIT_EXEC_LOG" ]
+[ ! -e "$root/home/Library" ]
+set -- "$root/tmp"/*
+[ ! -e "$1" ]
+case "$(cat "$root/preview")" in *'latest Tacit'*) ;; *) exit 1 ;; esac
 MOCK_NODE_VERSION=22.22.1
 export MOCK_NODE_VERSION
 if TEST_LOG="$root/old-node-log" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
@@ -70,6 +109,14 @@ brew install starship
 brew install eza
 brew install gh
 brew install lsof' ]
+[ "$(cat "$TACIT_DOWNLOAD_LOG")" = 'https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh' ]
+[ -x "$root/home/.local/bin/tacit" ]
+[ -x "$root/home/.local/bin/tacit-config" ]
+[ -d "$root/home/Library/Input Methods/tacit.app" ]
+tacit_path=$(cat "$TACIT_PATH_LOG")
+case "$tacit_path" in "$root/tmp"/dotfiles-tacit.*/install.sh) ;; *) exit 1 ;; esac
+[ "$(cat "$TACIT_EXEC_LOG")" = "$tacit_path" ]
+[ ! -e "${tacit_path%/*}" ]
 # New installations are checked after Homebrew completes; existing old nvim is rejected before package actions.
 MOCK_NVIM_VERSION=0.11.5
 export MOCK_NVIM_VERSION
@@ -88,8 +135,47 @@ fi
 MOCK_NVIM_VERSION=0.12.0
 export MOCK_NVIM_VERSION
 cp "$root/nvim-tool" "$root/bin/nvim"
+: > "$TACIT_DOWNLOAD_LOG"
+: > "$TACIT_EXEC_LOG"
 TEST_LOG="$root/mac-rerun-log" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/mac-rerun"
 [ ! -e "$root/mac-rerun-log" ]
+[ "$(cat "$TACIT_DOWNLOAD_LOG")" = 'https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh' ]
+[ "$(cat "$TACIT_EXEC_LOG")" = "$(cat "$TACIT_PATH_LOG")" ]
+tacit_path=$(cat "$TACIT_PATH_LOG")
+[ ! -e "${tacit_path%/*}" ]
+
+# Download and installer failures retain their status and clean private storage.
+for failure in download installer; do
+    : > "$TACIT_EXEC_LOG"
+    status=0
+    if [ "$failure" = download ]; then
+        MOCK_TACIT_DOWNLOAD_STATUS=23 HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1 || status=$?
+        [ "$status" -eq 23 ]
+        [ ! -s "$TACIT_EXEC_LOG" ]
+    else
+        MOCK_TACIT_INSTALL_STATUS=42 HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1 || status=$?
+        [ "$status" -eq 42 ]
+        [ "$(cat "$TACIT_EXEC_LOG")" = "$(cat "$TACIT_PATH_LOG")" ]
+    fi
+    tacit_path=$(cat "$TACIT_PATH_LOG")
+    [ ! -e "${tacit_path%/*}" ]
+done
+: > "$TACIT_DOWNLOAD_LOG"
+: > "$TACIT_EXEC_LOG"
+HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/mac-existing-preview"
+[ ! -s "$TACIT_DOWNLOAD_LOG" ]
+[ ! -s "$TACIT_EXEC_LOG" ]
+set -- "$root/tmp"/*
+[ ! -e "$1" ]
+# macOS requires curl even when every CLI and Tacit are already installed.
+rm "$root/bin/curl"
+if HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1; then
+    printf 'Missing macOS curl should fail preflight\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'prerequisite: curl'*) ;; *) exit 1 ;; esac
+[ ! -s "$TACIT_DOWNLOAD_LOG" ]
+cp "$root/curl" "$root/bin/curl"
 rm "$root/bin/nvim" "$root/bin/rg" "$root/bin/fd" "$root/bin/starship" "$root/bin/eza" "$root/bin/gh" "$root/bin/lsof" "$root/bin/curl"
 
 MOCK_OS=Linux
@@ -193,6 +279,9 @@ if TEST_LOG="$root/unsupported-log" HOME="$root/home" PATH="$root/bin" "$repo/sc
     exit 1
 fi
 [ ! -e "$root/unsupported-log" ]
+# Linux must never download or execute Tacit, even when already installed.
+[ ! -s "$TACIT_DOWNLOAD_LOG" ]
+[ ! -s "$TACIT_EXEC_LOG" ]
 MOCK_OS=Darwin
 export MOCK_OS
 rm "$root/bin/brew"

@@ -233,3 +233,19 @@ if [ "$dry_run" -eq 0 ]; then
         exit 1
     fi
 fi
+
+# Upstream looks for bundled files beside its installer; use a private directory.
+install_tacit() (
+    installer_dir=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-tacit.XXXXXXXX") || exit $?
+    trap 'rm -rf "$installer_dir"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    curl -fsSL https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh -o "$installer_dir/install.sh" || exit $?
+    /bin/sh "$installer_dir/install.sh"
+)
+
+if [ "$os" = Darwin ]; then
+    printf 'Install/update: latest Tacit via official release installer\n'
+    [ "$dry_run" -eq 1 ] || install_tacit
+fi
