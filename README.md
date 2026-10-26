@@ -29,6 +29,7 @@ Initialization detects the OS with `uname -s`, independently of the current logi
 | Appearance, clock, Dock, Finder | Applied | Skipped |
 | System/display idle sleep | Disabled on all power sources | Unchanged |
 | CLI installation | Homebrew | apt-get (Ubuntu/Debian) + official Starship installer |
+| Tacit input method | Install/update latest via official installer | Skipped |
 | Automatic maintenance (opt-in) | User LaunchAgent | systemd user service and timer |
 
 The bundled editor configuration requires **Neovim 0.12 or newer**. On Linux, install a compatible [official Neovim build](https://github.com/neovim/neovim/releases) before initialization; distribution packages such as Ubuntu 24.04's Neovim 0.9.5 are too old. On macOS, missing Neovim is installed through Homebrew; upgrade an existing outdated installation first.
@@ -36,6 +37,10 @@ The bundled editor configuration requires **Neovim 0.12 or newer**. On Linux, in
 Editor setup also requires Node.js **22.22.2 or newer** with npm (for the current TypeScript language server), Go, a C compiler (`cc`), and [tree-sitter-cli](https://github.com/tree-sitter/tree-sitter/releases) 0.26.1 or newer for automatic language-server/parser installation. Download/extraction tools `curl`, `tar`, `unzip`, and `gzip` must also be available. Install these development prerequisites before initialization (on macOS, Homebrew provides `node`, `go`, and `tree-sitter-cli`; Apple's Command Line Tools provide `cc`). Tool preflight rejects missing or incompatible prerequisites instead of linking a known-broken editor setup. `--no-packages` skips tool installation/preflight and leaves these requirements to you.
 
 Missing remaining CLI tools are installed: ripgrep, fd, Starship, eza, gh, and lsof. Package names are mapped to executables (`ripgrep` → `rg`); Linux uses `fd-find` → `fdfind`. Linux package availability is checked before the install batch; releases without a required package (for example, Ubuntu 22.04 without eza) require manually installing it or using a newer release. macOS zsh settings resolve the Homebrew prefix for Apple Silicon and Intel Macs.
+
+On macOS, every explicit initialization installs or updates [Tacit](https://github.com/iamallyouneed/Tacit), even when it is already installed. The helper downloads the [official latest-release installer](https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh) completely into a private temporary directory, then runs it with `/bin/sh` and cleans up. “Latest” is resolved at invocation, not pinned by this checkout. `--dry-run` neither downloads nor executes it; `--no-packages` opts out. `--no-macos` skips preferences only and **does not skip Tacit**. Maintenance never installs or updates Tacit.
+
+This executes trusted upstream code: the installer chooses the platform package and checks its SHA-256; that checksum checks corruption, not independent authenticity. The upstream installer installs the unsigned app at `~/Library/Input Methods/tacit.app` and commands at `~/.local/bin/tacit` and `~/.local/bin/tacit-config`, removes quarantine attributes, and opens a welcome browser on first installation. Reruns retain the language edition and settings. **Log out and back in, then manually add Tacit as an input source in System Settings → Keyboard → Text Input → Edit.**
 
 Git identity is set to `snowykr` / `snowykr22@gmail.com`. Application configuration is linked under `${XDG_CONFIG_HOME:-$HOME/.config}`; a custom configuration root must be absolute. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
 
@@ -45,8 +50,8 @@ Options:
 
 - `--dry-run`: preview without changing files, preferences, Git configuration or scheduler registration.
 - `--auto-update`: opt in to automatic maintenance after successful setup. Omit it to leave existing scheduler state untouched.
-- `--no-packages`: skip CLI installation. On distributions without apt-get, install the listed tools manually and use this option.
-- `--no-macos`: leave macOS appearance, clock, Dock, Finder and power settings unchanged.
+- `--no-packages`: skip tool installation/preflight, including Tacit on macOS. On distributions without apt-get, install the listed tools manually and use this option.
+- `--no-macos`: leave macOS appearance, clock, Dock, Finder and power settings unchanged; package installation, including Tacit, still runs.
 - `--shell zsh|bash`: override the OS-selected shell configuration.
 - `--homebrew`: additionally install macOS apps and fonts from `Brewfile`.
 
