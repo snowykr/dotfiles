@@ -7,9 +7,10 @@ dry_run=0
 with_brew=0
 with_macos=1
 with_tools=1
+with_auto_update=0
 
 usage() {
-    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos]\n' "$0"
+    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos] [--auto-update]\n' "$0"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -22,6 +23,7 @@ while [ "$#" -gt 0 ]; do
         --no-packages) with_tools=0 ;;
         --homebrew) with_brew=1 ;;
         --no-macos) with_macos=0 ;;
+        --auto-update) with_auto_update=1 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -48,6 +50,11 @@ if [ "$with_brew" -eq 1 ]; then
         exit 1
     }
 fi
+config_dir=${XDG_CONFIG_HOME:-$HOME/.config}
+case "$config_dir" in
+    /*) ;;
+    *) printf 'XDG_CONFIG_HOME must be an absolute path\n' >&2; exit 2 ;;
+esac
 printf 'Platform: %s; shell config: %s\n' "$os" "$mode"
 
 if [ "$with_tools" -eq 1 ]; then
@@ -103,9 +110,9 @@ case "$mode" in
     zsh) link_config "$repo/shell/zshrc" "$HOME/.zshrc" ;;
     bash) link_config "$repo/shell/bashrc" "$HOME/.bashrc" ;;
 esac
-link_config "$repo/config/nvim" "$HOME/.config/nvim"
+link_config "$repo/config/nvim" "$config_dir/nvim"
 if [ "$os" = Darwin ]; then
-    link_config "$repo/config/ghostty/config" "$HOME/.config/ghostty/config"
+    link_config "$repo/config/ghostty/config" "$config_dir/ghostty/config"
 fi
 
 if [ "$with_brew" -eq 1 ]; then
@@ -120,5 +127,14 @@ if [ "$with_macos" -eq 1 ]; then
         "$repo/scripts/macos-defaults.sh" --dry-run
     else
         "$repo/scripts/macos-defaults.sh"
+    fi
+fi
+
+# Registration is the only maintenance operation performed during initialization.
+if [ "$with_auto_update" -eq 1 ]; then
+    if [ "$dry_run" -eq 1 ]; then
+        /bin/sh "$repo/maintain.sh" enable --dry-run
+    else
+        /bin/sh "$repo/maintain.sh" enable
     fi
 fi
