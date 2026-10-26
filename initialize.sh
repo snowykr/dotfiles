@@ -7,10 +7,10 @@ dry_run=0
 with_brew=0
 with_macos=1
 with_tools=1
-with_auto_update=1
+with_auto_update=0
 
 usage() {
-    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos] [--no-auto-update]\n' "$0"
+    printf 'Usage: %s [--dry-run] [--shell auto|zsh|bash] [--no-packages] [--homebrew] [--no-macos] [--auto-update]\n' "$0"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -23,7 +23,7 @@ while [ "$#" -gt 0 ]; do
         --no-packages) with_tools=0 ;;
         --homebrew) with_brew=1 ;;
         --no-macos) with_macos=0 ;;
-        --no-auto-update) with_auto_update=0 ;;
+        --auto-update) with_auto_update=1 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac

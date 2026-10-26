@@ -29,7 +29,7 @@ Initialization detects the OS with `uname -s`, independently of the current logi
 | Appearance, clock, Dock, Finder | Applied | Skipped |
 | System/display idle sleep | Disabled on all power sources | Unchanged |
 | CLI installation | Homebrew | apt-get (Ubuntu/Debian) + official Starship installer |
-| Automatic maintenance | User LaunchAgent | systemd user service and timer |
+| Automatic maintenance (opt-in) | User LaunchAgent | systemd user service and timer |
 
 The bundled editor configuration requires **Neovim 0.12 or newer**. On Linux, install a compatible [official Neovim build](https://github.com/neovim/neovim/releases) before initialization; distribution packages such as Ubuntu 24.04's Neovim 0.9.5 are too old. On macOS, missing Neovim is installed through Homebrew; upgrade an existing outdated installation first.
 
@@ -39,12 +39,12 @@ Missing remaining CLI tools are installed: ripgrep, fd, Starship, eza, gh, and l
 
 Git identity is set to `snowykr` / `snowykr22@gmail.com`. Application configuration is linked under `${XDG_CONFIG_HOME:-$HOME/.config}`; a custom configuration root must be absolute. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
 
-After successful initialization, automatic maintenance is registered for a `main` checkout with an `origin` remote. Registration is skipped on development branches. Private-repository credentials must work without a terminal prompt; authentication is not performed by a scheduled job.
+Automatic maintenance is **off by default on a fresh setup**. To opt in during initialization, run `./initialize.sh --auto-update`; after successful setup it registers maintenance for a `main` checkout with an `origin` remote. Registration is skipped on development branches. Plain initialization and its dry-run never change scheduler registration, including on repeat runs. To stop an already-enabled schedule, explicitly run `./maintain.sh disable`. Private-repository credentials must work without a terminal prompt; authentication is not performed by a scheduled job.
 
 Options:
 
 - `--dry-run`: preview without changing files, preferences, Git configuration or scheduler registration.
-- `--no-auto-update`: do not register automatic maintenance.
+- `--auto-update`: opt in to automatic maintenance after successful setup. Omit it to leave existing scheduler state untouched.
 - `--no-packages`: skip CLI installation. On distributions without apt-get, install the listed tools manually and use this option.
 - `--no-macos`: leave macOS appearance, clock, Dock, Finder and power settings unchanged.
 - `--shell zsh|bash`: override the OS-selected shell configuration.
@@ -107,8 +107,8 @@ Both schedule `/bin/sh <installed-repo>/maintain.sh update`, without sudo. Absol
 
 | Remote change | Action |
 | --- | --- |
-| Existing aliases or shell configuration | Download automatically; open a new shell or source its config |
-| Existing Neovim/Ghostty configuration | Download automatically; reload/restart the app as needed |
+| Existing aliases or shell configuration | Download with `maintain.sh update`, or automatically when enabled; open a new shell or source its config |
+| Existing Neovim/Ghostty configuration | Download with `maintain.sh update`, or automatically when enabled; reload/restart the app as needed |
 | New configuration links | Run `initialize.sh` again |
 | New packages or apps | Run `initialize.sh` again |
 | macOS system preferences | Run `initialize.sh` again |
