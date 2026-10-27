@@ -80,24 +80,104 @@ To review or apply macOS preferences separately:
 
 ### Update safety
 
-Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. Fast-forward eligibility requires a clean `main` checkout targeting `origin/main`.
+Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. GitHub `origin/main` is the source of configuration; fast-forward eligibility requires a clean `main` checkout targeting it. Keep the installed checkout on `main` and do not switch branches while maintenance is running. Use a separate clone for development.
 
 - Modified, staged or untracked files: skip without changing local work.
 - Development branch, detached HEAD or an in-progress Git operation: skip.
 - Local commits ahead of or diverged from upstream, including upstream rewrites: skip.
 - Network/authentication failure: record an error and retry at the next scheduled run.
 - Concurrent updates: only one obtains the update lock.
-- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching.
+- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching, but these checks do not atomically protect the checkout during the fast-forward.
 
-The update lock serializes maintenance runs, **not interactive Git commands**. Branch checks and Git's checkout/ref mutation are not atomic: a same-commit branch switch in the final check-to-merge window can still advance the other branch. This is a concurrency limitation, not a guaranteed safe skip. Disable scheduling and confirm no update is running before changing branches in the installed checkout; use a separate clone for development.
+The update lock serializes maintenance runs, **not interactive Git commands**. A reference-transaction guard checks the expected refs and that HEAD still names `main` when each transaction is prepared; this is not atomic checkout protection. Observed switches cause a skip or failure, not an automatic branch change. In the tested mid-merge independent-switch case, the switch succeeds and the guard rejects the final reference transaction, leaving both branch tips unchanged but downloaded changes staged in the index and present in the working tree. This residual state is an accepted failure outcome, not a clean-checkout guarantee: maintenance warns you to inspect the checkout manually and does not roll it back. Other interleavings can escape the checks, and there is no universal guarantee that refs or files remain unchanged. Disable scheduling and confirm no update is running before switching branches in the installed checkout.
 
-There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations, but this is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
+Every update also re-verifies that the checkout is still `main` after a successful fast-forward. Below Git 2.28 the guard is unavailable, so maintenance skips the update in both real and preview runs instead of merging unguarded; upgrade Git, or fast-forward manually with `git -C <repo> pull --ff-only`. Interactive Git use in an installed checkout is still discouraged: use a separate clone for development and confirm no update is running before changing branches there.
+
+There is no automatic stash, reset, rollback, rebase or branch switch. User Git hooks are disabled for maintenance operations; the fast-forward uses only the generated reference-transaction guard. This is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
 
 Logs and the update lock live outside the repository at `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles`. Update and macOS scheduler logs rotate at 64 KiB, keeping one previous file. If an updater is force-killed or the machine loses power, `status` can report a stale lock. Confirm no update is running before removing the reported `update.lock` directory; maintenance does not steal a lock from another process.
 
 Keep machine-specific shell changes in `~/.zshrc.local` or `~/.bashrc.local` rather than editing the tracked files.
 
-The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Maintenance never discards plugin-lock changes for you.
+The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Unattended maintenance never discards plugin-lock changes; explicit `recover --discard-changes` discards them along with all other tracked edits.
+
+### Explicit manual recovery
+
+Unattended `update` never invokes recovery. When it stops, diagnostics list checkout changes and print a shell-quoted recovery command for the actual installed path and state directory. Review/back up those changes first, including any staged residue from a rejected mid-update race.
+
+#### 1. Select the installed checkout and inspect it
+
+Use the exact repository path printed by the update diagnostic, not a development clone. For installations in `~/.dotfiles-main`:
+
+```sh
+DOTFILES_REPO="$HOME/.dotfiles-main"
+/bin/sh "$DOTFILES_REPO/maintain.sh" status
+/bin/sh "$DOTFILES_REPO/maintain.sh" recover
+```
+
+For an installation in `~/.dotfiles`, change `DOTFILES_REPO` accordingly. If the diagnostic includes `XDG_STATE_HOME=...`, retain that same value for every command below so they share the scheduler's lock and logs. Plain `recover` only previews: it does **not** repair anything or fetch new history.
+
+#### 2. Pause scheduling and back up work
+
+Stop editors and interactive Git operations in this checkout. Inspect `status` and wait for any active maintenance to finish **before** disabling scheduling, especially on macOS: unloading the LaunchAgent can interrupt its running updater. If automatic maintenance is enabled, pause it once the active run has finished:
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" disable
+/bin/sh "$DOTFILES_REPO/maintain.sh" status
+```
+
+On Linux, disabling the timer leaves an already-running update service running. On macOS, `launchctl bootout` unloads the job and may interrupt it. Disabling alone is **not proof that maintenance has finished**: recheck status, process/lock ownership, and checkout state before proceeding. If an update started between your checks, wait for it or inspect an interrupted run; do not remove an active lock to force recovery. Copy any work you need to keep **outside this checkout**, including staged edits, Neovim's tracked `lazy-lock.json`, and local commits. A full checkout backup including `.git` preserves more than a plain `git diff`, which does not include every kind of local work. Recovery makes no automatic backup.
+
+#### 3. Preview, then explicitly discard
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" recover --discard-changes --dry-run
+```
+
+Read the affected paths, configured `origin`, and local-main commit list. The preview uses cached remote history; actual recovery fetches again and prints the updated commit-loss list before discarding. **The command below is destructive and does not ask for another interactive confirmation:**
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" recover --discard-changes
+```
+
+The `--discard-changes` flag is your acknowledgement. Never add this command to the automatic scheduler.
+
+#### 4. Verify and resume
+
+Successful recovery prints `Recovered: main -> <commit>`. Check the result:
+
+```sh
+git -C "$DOTFILES_REPO" branch --show-current  # main
+git -C "$DOTFILES_REPO" status --short         # empty
+/bin/sh "$DOTFILES_REPO/maintain.sh" status
+```
+
+If scheduling was enabled before you paused it, restore it only after verifying recovery:
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" enable
+```
+
+Open a new shell or reload/restart affected applications to use the recovered configuration.
+
+#### Refusals and partial failures
+
+| Message or condition | What to do |
+| --- | --- |
+| Untracked/ignored paths | Move the listed paths outside the checkout; even noncolliding files cause refusal. Do not delete them blindly. |
+| Update lock exists | Wait for the running operation. For a stale lock, follow the ownership checks in **Update safety**; do not bypass an active lock. |
+| Git operation in progress | Finish or deliberately abort that operation yourself after reviewing its changes. |
+| Missing `main`, sparse checkout, or submodules | This recovery command does not support that checkout; inspect it manually. |
+| Fetch/authentication/network failure | Fix connectivity or credentials; fetch failure occurs before tracked edits are discarded. |
+| Failure after switching/reset starts | Some changes may already have been discarded and the branch may be `main`. Inspect status and your backup before retrying; there is no automatic rollback. |
+
+#### Destructive scope and limits
+
+**Recovery discards all tracked staged/working-tree edits and local `main` commits absent from freshly fetched `origin/main`.** It warns before mutation, fetches with the update watchdog, switches explicitly to the existing `main`, then resets only `main` to the verified fetched commit. It does not create/delete branches or reset a starting non-`main` branch tip; `main` is reset even when you started on `main`. Uncommitted tracked edits are discarded regardless of the starting branch. Fetch failure leaves your checkout work intact. Trust the configured `origin` before acknowledging: its configuration and scripts will replace yours.
+
+Recovery shares the update lock and cleanup, disables user hooks, and guards reset reference transactions. It refuses in-progress Git operations, missing `main`, sparse checkouts, submodules, and **any untracked or ignored paths**, even noncolliding ones. Move those paths outside the checkout yourself first; recovery never runs `git clean`. Preview neither fetches nor writes refs, index, state, logs or locks; its commit list uses cached upstream history.
+
+Stop editors and interactive Git operations before recovery. The maintenance lock does not exclude those processes; preflight checks and reference guards are not atomic worktree protection. Concurrent external writes/switches can still cause a partial failure, so do not race recovery. A refusal after switching may leave you on `main`; inspect rather than retrying blindly.
 
 ### Scheduling
 

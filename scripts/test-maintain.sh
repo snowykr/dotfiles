@@ -59,7 +59,7 @@ run_maintain() {
 }
 
 # Clone before publication so these checkouts really are behind the remote.
-for name in clean dry dirty staged untracked ignored feature detached diverged concurrent mid-fetch switch-fetch head-fetch interrupted timeout; do
+for name in clean dry dirty staged untracked ignored feature detached diverged concurrent mid-fetch switch-fetch head-fetch interrupted timeout merge-switch merge-capture merge-late merge-concurrent guard-version unguarded; do
     new_checkout "$name"
 done
 printf 'alias fresh=true\n' >> "$root/publisher/shell/common.sh"
@@ -161,8 +161,20 @@ case "$(cat "$state_home/dotfiles/update.log")" in *"Failed: could not fetch"*) 
 
 # A fake transport blocks on a FIFO so concurrency and cancellation are deterministic.
 printf '%s\n' '#!/bin/sh
+late_merge=0
 for arg in "$@"; do
+    if [ "$arg" = version ] && [ "${VERSION_MODE:-}" = old ]; then
+        printf "git version 2.27.0\n"
+        exit 0
+    fi
     if [ "${INSPECT_FAIL:-}" = "$arg" ]; then exit 1; fi
+    if [ "$arg" = merge ]; then
+        case "${MERGE_MODE:-}" in
+            capture) cp -R "$GUARD_SOURCE" "$GUARD_CAPTURE" ;;
+            switch) "$REAL_GIT" -C "$EDIT_REPO" switch -q -c switched-during-merge ;;
+            late-switch) late_merge=1 ;;
+        esac
+    fi
     if [ "$arg" = fetch ]; then
         [ "$GIT_TERMINAL_PROMPT" = 0 ] && [ "$GCM_INTERACTIVE" = never ] && [ "$GH_PROMPT_DISABLED" = 1 ] || exit 99
         if [ "${FETCH_MODE:-}" = edit ]; then
@@ -182,6 +194,23 @@ for arg in "$@"; do
         fi
     fi
 done
+if [ "${late_merge:-0}" = 1 ]; then
+    "$REAL_GIT" "$@"
+    status=$?
+    if [ "$status" -eq 0 ]; then "$REAL_GIT" -C "$EDIT_REPO" switch -q late-branch; fi
+    exit "$status"
+fi
+# Reuse the generated guard directory through a wrapper hook that also injects
+# a competing operation at a deterministic point inside the real merge.
+if [ "${MERGE_MODE:-}" = hookwrap ]; then
+    case " $* " in
+        *" merge "*)
+            if [ "$1" = -c ] && [ "${2#core.hooksPath=}" != "$2" ]; then
+                shift 2
+                set -- -c "core.hooksPath=$WRAP_HOOKS" "$@"
+            fi ;;
+    esac
+fi
 exec "$REAL_GIT" "$@"
 ' > "$root/bin/git"
 for tool in sudo brew apt-get; do
@@ -420,6 +449,285 @@ if XDG_STATE_HOME=relative /bin/sh "$checkout/maintain.sh" update > "$root/relat
     printf 'Relative state paths should be rejected\n' >&2
     exit 1
 fi
+
+# A branch switch between the eligibility check and the checkout must abort before any change.
+case_name=merge-switch
+checkout="$root/checkouts/$case_name"
+state_home="$root/state/$case_name"
+env MERGE_MODE=switch EDIT_REPO="$checkout" PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/merge-switch-output" 2>&1
+case "$(cat "$root/merge-switch-output")" in *'Skipped: the checkout switched away from main; the checkout is clean at the original commit'*) ;; *) cat "$root/merge-switch-output" >&2; exit 1 ;; esac
+assert_eq "$(git -C "$checkout" branch --show-current)" switched-during-merge
+assert_eq "$(git -C "$checkout" rev-parse switched-during-merge)" "$old"
+assert_eq "$(git -C "$checkout" rev-parse main)" "$old"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+[ ! -e "$checkout/ignored-local.txt" ]
+case "$(cat "$checkout/shell/common.sh")" in *fresh*) exit 1 ;; *) ;; esac
+[ ! -e "$state_home/dotfiles/update.lock" ]
+
+# The generated hook admits only this fast-forward's transactions.
+case_name=merge-capture
+checkout="$root/checkouts/$case_name"
+state_home="$root/state/$case_name"
+env MERGE_MODE=capture GUARD_SOURCE="$state_home/dotfiles/update.lock/ref-guard" GUARD_CAPTURE="$root/ref-guard" PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/merge-capture-output" 2>&1
+assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$latest"
+[ -x "$root/ref-guard/reference-transaction" ]
+[ "$(cut -d' ' -f1 "$root/ref-guard/expected")" = "$old" ]
+zeros=$(printf '%*s' "${#old}" '' | tr ' ' 0)
+run_guard() {
+    rm -f "$root/ref-guard/rejected"
+    guard_status=0
+    (cd "$checkout" && /bin/sh "$root/ref-guard/reference-transaction" "$1" < "$2") || guard_status=$?
+}
+printf 'garbage with no refs\n' > "$root/guard-unchecked"
+run_guard preparing "$root/guard-unchecked"
+assert_eq "$guard_status" 0
+[ ! -e "$root/ref-guard/rejected" ]
+printf '%s %s ORIG_HEAD\n' "$zeros" "$old" > "$root/guard-orig-ok"
+run_guard prepared "$root/guard-orig-ok"
+assert_eq "$guard_status" 0
+[ ! -e "$root/ref-guard/rejected" ]
+printf '%s %s HEAD\n%s %s refs/heads/main\n' "$old" "$latest" "$old" "$latest" > "$root/guard-final-ok"
+run_guard prepared "$root/guard-final-ok"
+assert_eq "$guard_status" 0
+# Empty, duplicate, partial and mixed transaction shapes must fail closed.
+: > "$root/guard-empty"
+printf '\n' > "$root/guard-blank"
+printf '%s %s HEAD\n' "$old" "$latest" > "$root/guard-head-only"
+printf '%s %s refs/heads/main\n%s %s refs/heads/main\n' "$old" "$latest" "$old" "$latest" > "$root/guard-duplicate"
+printf '%s %s ORIG_HEAD\n%s %s refs/heads/main\n' "$zeros" "$old" "$old" "$latest" > "$root/guard-mixed"
+printf '%s %s AUTO_MERGE\n%s %s AUTO_MERGE\n' "$zeros" "$zeros" "$zeros" "$zeros" > "$root/guard-auto-duplicate"
+for shape in empty blank head-only duplicate mixed auto-duplicate; do
+    run_guard prepared "$root/guard-$shape"
+    assert_eq "$guard_status" 1
+    assert_eq "$(cat "$root/ref-guard/rejected")" unexpected
+done
+printf '%s %s refs/heads/main\n' "$old" "$latest" > "$root/guard-main-only"
+run_guard prepared "$root/guard-main-only"
+assert_eq "$guard_status" 0
+printf '%s %s AUTO_MERGE\n' "$zeros" "$zeros" > "$root/guard-auto-merge"
+run_guard prepared "$root/guard-auto-merge"
+assert_eq "$guard_status" 0
+printf '%s %s ORIG_HEAD\n' "$zeros" "$latest" > "$root/guard-orig-stale"
+run_guard prepared "$root/guard-orig-stale"
+assert_eq "$guard_status" 1
+assert_eq "$(cat "$root/ref-guard/rejected")" unexpected
+printf '%s %s HEAD\n%s %s refs/heads/other\n' "$old" "$latest" "$old" "$latest" > "$root/guard-foreign-ref"
+run_guard prepared "$root/guard-foreign-ref"
+assert_eq "$guard_status" 1
+assert_eq "$(cat "$root/ref-guard/rejected")" unexpected
+printf '%s %s HEAD\n%s %s refs/heads/main\n' "$latest" "$latest" "$old" "$latest" > "$root/guard-stale-old"
+run_guard prepared "$root/guard-stale-old"
+assert_eq "$guard_status" 1
+assert_eq "$(cat "$root/ref-guard/rejected")" unexpected
+git -C "$checkout" switch -q -c guard-other "$old"
+run_guard prepared "$root/guard-orig-ok"
+assert_eq "$guard_status" 1
+assert_eq "$(cat "$root/ref-guard/rejected")" branch-switched
+run_guard prepared "$root/guard-final-ok"
+assert_eq "$guard_status" 1
+assert_eq "$(cat "$root/ref-guard/rejected")" commit-race
+[ "$guard_status" -ne 0 ]
+git -C "$checkout" switch -q main
+assert_eq "$(git -C "$checkout" rev-parse guard-other)" "$old"
+
+# A switch after a successful fast-forward is reported instead of passed off as a clean update.
+case_name=merge-late
+checkout="$root/checkouts/$case_name"
+state_home="$root/state/$case_name"
+git -C "$checkout" branch late-branch "$old"
+if env MERGE_MODE=late-switch EDIT_REPO="$checkout" PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/merge-late-output" 2>&1; then
+    printf 'A checkout that left main during the update should be reported\n' >&2
+    exit 1
+fi
+case "$(cat "$root/merge-late-output")" in *'the checkout is no longer main after the update'*) ;; *) cat "$root/merge-late-output" >&2; exit 1 ;; esac
+assert_eq "$(git -C "$checkout" rev-parse main)" "$latest"
+assert_eq "$(git -C "$checkout" rev-parse late-branch)" "$old"
+[ ! -e "$state_home/dotfiles/update.lock" ]
+
+# Git without reference-transaction hooks must not fall back to an unguarded merge.
+case_name=guard-version
+checkout="$root/checkouts/$case_name"
+state_home="$root/state/$case_name"
+# A preview must not promise a fast-forward the guard cannot bind.
+env VERSION_MODE=old PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update --dry-run > "$root/guard-version-preview"
+case "$(cat "$root/guard-version-preview")" in *'Would skip: Git 2.28 or newer is required'*) ;; *) cat "$root/guard-version-preview" >&2; exit 1 ;; esac
+env VERSION_MODE=old PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/guard-version-output" 2>&1
+case "$(cat "$root/guard-version-output")" in *'Skipped: Git 2.28 or newer is required'*) ;; *) cat "$root/guard-version-output" >&2; exit 1 ;; esac
+assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$old"
+[ ! -e "$state_home/dotfiles/update.lock" ]
+
+# An independent mid-merge switch succeeds, but maintenance must fail honestly.
+# The rejected ref transaction leaves downloaded index/worktree changes for inspection.
+case_name=merge-concurrent
+checkout="$root/checkouts/$case_name"
+state_home="$root/state/$case_name"
+git -C "$checkout" branch mid-race "$old"
+wrap_hooks="$root/wrap-hooks"
+mkdir -p "$wrap_hooks"
+cat > "$wrap_hooks/reference-transaction" <<'HOOK'
+#!/bin/sh
+cat > "$MID_TX"
+if [ "${1:-}" = committed ] && [ ! -f "$MID_ACTED" ] && grep -q ' ORIG_HEAD$' "$MID_TX"; then
+    : > "$MID_ACTED"
+    # A separate terminal does not inherit the merge invocation hook configuration.
+    "$REAL_GIT" -c core.hooksPath=/dev/null -C "$MID_REPO" switch -q mid-race > "$MID_LOG" 2>&1
+    printf '%s\n' "$?" > "$MID_STATUS"
+fi
+exec /bin/sh "$MID_GUARD" "$1" < "$MID_TX"
+HOOK
+chmod +x "$wrap_hooks/reference-transaction"
+MID_TX="$root/mid-tx"
+MID_ACTED="$root/mid-acted"
+MID_LOG="$root/mid-log"
+MID_STATUS="$root/mid-status"
+MID_REPO="$checkout"
+MID_GUARD="$state_home/dotfiles/update.lock/ref-guard/reference-transaction"
+export MID_TX MID_ACTED MID_LOG MID_STATUS MID_REPO MID_GUARD REAL_GIT WRAP_HOOKS="$wrap_hooks"
+concurrent_result=0
+env MERGE_MODE=hookwrap PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/merge-concurrent-output" 2>&1 || concurrent_result=$?
+[ -f "$root/mid-acted" ]
+assert_eq "$(cat "$root/mid-status")" 0
+assert_eq "$(git -C "$checkout" rev-parse main)" "$old"
+assert_eq "$(git -C "$checkout" rev-parse mid-race)" "$old"
+assert_eq "$(git -C "$checkout" branch --show-current)" mid-race
+[ ! -e "$state_home/dotfiles/update.lock" ]
+assert_eq "$concurrent_result" 1
+case "$(cat "$root/merge-concurrent-output")" in
+    *'Failed:'*'the index and working tree may already hold the fetched changes. Inspect the checkout before continuing.'*) ;;
+    *) cat "$root/merge-concurrent-output" >&2; exit 1 ;;
+esac
+assert_eq "$(git -C "$checkout" diff --cached --name-only)" 'ignored-local.txt
+shell/common.sh'
+# The staged and working-tree contents are the downloaded tree, not a rollback.
+git -C "$checkout" diff --cached --exit-code "$latest" --
+git -C "$checkout" diff --exit-code --
+
+# Recover the actual staged residue above, preserving the non-main branch tip.
+run_maintain recover > "$root/recovery-preview"
+assert_eq "$(git -C "$checkout" branch --show-current)" mid-race
+assert_eq "$(git -C "$checkout" diff --cached --name-only)" 'ignored-local.txt
+shell/common.sh'
+run_maintain recover --discard-changes > "$root/recovery-race"
+assert_eq "$(git -C "$checkout" branch --show-current)" main
+assert_eq "$(git -C "$checkout" rev-parse mid-race)" "$old"
+assert_eq "$(git -C "$checkout" rev-parse main)" "$latest"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+[ ! -e "$state_home/dotfiles/update.lock" ]
+
+for recovery_case in preview dirty clean network untracked ignored locked operation missing-main; do
+    new_checkout "recover-$recovery_case"
+    git -C "$checkout" reset -q --hard "$old"
+    case "$recovery_case" in
+        preview|dirty|network) printf 'user tracked edit\n' >> "$checkout/shell/common.sh" ;;
+        untracked) printf 'preserve\n' > "$checkout/local.txt" ;;
+        ignored) printf 'preserve\n' > "$checkout/ignored-local.txt" ;;
+        locked) mkdir -p "$state_home/dotfiles/update.lock"; printf 'owner\n' > "$state_home/dotfiles/update.lock/pid" ;;
+        operation) printf '%s\n' "$latest" > "$checkout/.git/MERGE_HEAD" ;;
+        missing-main) git -C "$checkout" branch -m work ;;
+    esac
+    if [ "$recovery_case" = network ]; then git -C "$checkout" remote set-url origin "$root/missing.git"; fi
+    saved_status=$(git -C "$checkout" status --porcelain --ignored)
+    saved_contents=$(cat "$checkout/shell/common.sh")
+    cp "$checkout/.git/index" "$root/recover-index"
+    case "$recovery_case" in
+        preview)
+            run_maintain recover > "$root/recover-preview"
+            run_maintain recover --discard-changes --dry-run > "$root/recover-dry"
+            cmp "$checkout/.git/index" "$root/recover-index"
+            [ ! -e "$checkout/.git/FETCH_HEAD" ]
+            [ ! -e "$state_home" ] ;;
+        dirty|clean)
+            # A clean but divergent main must also be deliberately reset.
+            git -C "$checkout" commit -q --allow-empty -m 'local main commit'
+            run_maintain recover --discard-changes > "$root/recover-$recovery_case"
+            assert_eq "$(git -C "$checkout" rev-parse main)" "$latest"
+            assert_eq "$(git -C "$checkout" status --porcelain)" ''
+            [ ! -e "$state_home/dotfiles/update.lock" ]
+            continue ;;
+        *)
+            if run_maintain recover --discard-changes > "$root/recover-$recovery_case" 2>&1; then
+                printf 'Recovery should refuse %s\n' "$recovery_case" >&2; exit 1
+            fi ;;
+    esac
+    assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$old"
+    assert_eq "$(git -C "$checkout" status --porcelain --ignored)" "$saved_status"
+    assert_eq "$(cat "$checkout/shell/common.sh")" "$saved_contents"
+    case "$recovery_case" in
+        untracked) assert_eq "$(cat "$checkout/local.txt")" preserve ;;
+        ignored) assert_eq "$(cat "$checkout/ignored-local.txt")" preserve ;;
+        locked) assert_eq "$(cat "$state_home/dotfiles/update.lock/pid")" owner ;;
+        *) [ ! -e "$state_home/dotfiles/update.lock" ] ;;
+    esac
+done
+
+# The printed command must work for the actual path, including shell metacharacters.
+new_checkout "recover space ' quote"
+printf 'edit\n' >> "$checkout/shell/common.sh"
+run_maintain update > "$root/recover-command"
+command_line=$(sed -n '/^  XDG_STATE_HOME=/p' "$root/recover-command")
+[ -n "$command_line" ]
+/bin/sh -c "$command_line" > "$root/recover-command-result"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+
+# Replay must retain the original XDG base when dotfiles itself is a symlink.
+new_checkout "recover-state-symlink"
+state_destination="$root/recovery-storage"
+mkdir -p "$state_home" "$state_destination"
+ln -s "$state_destination" "$state_home/dotfiles"
+printf 'edit\n' >> "$checkout/shell/common.sh"
+run_maintain update > "$root/recover-symlink-command"
+command_line=$(sed -n '/^  XDG_STATE_HOME=/p' "$root/recover-symlink-command")
+[ -n "$command_line" ]
+# The replay must honor an existing lock at the original physical destination.
+mkdir "$state_destination/update.lock"
+printf 'original owner\n' > "$state_destination/update.lock/pid"
+if /bin/sh -c "$command_line" > "$root/recover-symlink-locked" 2>&1; then
+    printf 'Replayed recovery must honor the original state lock\n' >&2; exit 1
+fi
+assert_eq "$(cat "$state_destination/update.lock/pid")" 'original owner'
+[ -n "$(git -C "$checkout" status --porcelain)" ]
+[ ! -e "$state_destination/dotfiles" ]
+rm -rf "$state_destination/update.lock"
+/bin/sh -c "$command_line" > "$root/recover-symlink-result"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+case "$(cat "$state_destination/update.log")" in *'Recovered: main -> '*) ;; *) exit 1 ;; esac
+[ ! -e "$state_destination/update.lock" ]
+[ ! -e "$state_destination/dotfiles" ]
+[ -L "$state_home/dotfiles" ]
+
+# A root XDG base stays '/' in guidance; preview must not write there.
+XDG_STATE_HOME=/ /bin/sh "$checkout/maintain.sh" recover --dry-run > "$root/recover-root-preview"
+command_line=$(sed -n '/^  XDG_STATE_HOME=/p' "$root/recover-root-preview")
+case "$command_line" in "  XDG_STATE_HOME='/' /bin/sh "*) ;; *) exit 1 ;; esac
+
+# A merge that bypasses the guard must never be reported as a verified update.
+case_name=unguarded
+checkout="$root/checkouts/$case_name"
+state_home="$root/state/$case_name"
+sed 's/git_guarded merge/git_repo merge/' "$root/publisher/maintain.sh" > "$root/unguarded-maintain"
+mv "$root/unguarded-maintain" "$root/publisher/maintain.sh"
+git -C "$root/publisher" add maintain.sh
+git -C "$root/publisher" commit -qm 'test: drop the fast-forward guard'
+git -C "$root/publisher" push -q origin main
+run_maintain update > "$root/unguarded-first" 2>&1
+assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$(git -C "$root/publisher" rev-parse HEAD)"
+printf 'alias unguarded=true\n' >> "$root/publisher/shell/common.sh"
+git -C "$root/publisher" add shell/common.sh
+git -C "$root/publisher" commit -qm 'test: publish another configuration update'
+git -C "$root/publisher" push -q origin main
+unguarded_latest=$(git -C "$root/publisher" rev-parse HEAD)
+if run_maintain update > "$root/unguarded-output" 2>&1; then
+    printf 'An unguarded merge must not be reported as a verified update\n' >&2
+    exit 1
+fi
+case "$(cat "$root/unguarded-output")" in *'the fast-forward was not verified by the reference guard'*) ;; *) cat "$root/unguarded-output" >&2; exit 1 ;; esac
+assert_eq "$(git -C "$checkout" rev-parse main)" "$unguarded_latest"
+[ ! -e "$state_home/dotfiles/update.lock" ]
+# Restore the guarded entrypoint for the remaining fixtures.
+cp "$repo/maintain.sh" "$root/publisher/maintain.sh"
+git -C "$root/publisher" add maintain.sh
+git -C "$root/publisher" commit -qm 'test: restore the fast-forward guard'
+git -C "$root/publisher" push -q origin main
 
 # Updating maintain.sh itself must not execute newly downloaded code in this run.
 new_checkout self-update
