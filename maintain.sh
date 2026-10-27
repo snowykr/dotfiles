@@ -2,7 +2,8 @@
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-state_dir="${XDG_STATE_HOME:-"$HOME/.local/state"}/dotfiles"
+state_base=${XDG_STATE_HOME:-"$HOME/.local/state"}
+state_dir="$state_base/dotfiles"
 case "$state_dir" in
     /*) ;;
     *) printf 'XDG_STATE_HOME must be an absolute path\n' >&2; exit 2 ;;
@@ -44,18 +45,22 @@ case "$state_dir" in
 esac
 
 usage() {
-    printf 'Usage: %s [update|status|enable|disable] [--dry-run]\n' "$0"
+    printf 'Usage: %s [update|recover|status|enable|disable] [--dry-run] [--discard-changes]\n' "$0"
 }
 
 action=${1:-status}
 [ "$#" -eq 0 ] || shift
 dry_run=0
-if [ "$#" -eq 1 ] && [ "$1" = --dry-run ]; then
-    dry_run=1
-elif [ "$#" -ne 0 ]; then
-    usage >&2
-    exit 2
-fi
+discard_changes=0
+for option in "$@"; do
+    case "$option" in
+        --dry-run) dry_run=1 ;;
+        --discard-changes)
+            [ "$action" = recover ] || { usage >&2; exit 2; }
+            discard_changes=1 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+done
 
 # Background work must fail rather than opening authentication prompts.
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GH_PROMPT_DISABLED=1 GIT_OPTIONAL_LOCKS=0
@@ -153,6 +158,27 @@ record() {
     message=$1
     printf '%s\n' "$message"
     printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$message" >> "$state_dir/update.log"
+    if [ "$action" = update ]; then
+        case "$message" in
+            Skipped:*|Failed:*) recovery_guidance ;;
+        esac
+    fi
+}
+
+shell_quote() {
+    printf "'"
+    printf '%s' "$1" | sed "s/'/'\\\\''/g"
+    printf "'"
+}
+
+recovery_guidance() {
+    printf 'Affected checkout paths (including untracked/ignored):\n'
+    git_repo status --short --untracked-files=all --ignored || return 1
+    printf 'Review and back up local work first. Manual destructive recovery:\n  XDG_STATE_HOME='
+    shell_quote "$state_base"
+    printf ' /bin/sh '
+    shell_quote "$repo/maintain.sh"
+    printf ' recover --discard-changes\n'
 }
 
 eligible_branch() {
@@ -418,6 +444,94 @@ update() {
     fi
 }
 
+# Recovery deliberately refuses every untracked/ignored path, not just collisions.
+# Neither switch --discard-changes nor reset --hard is safe around such paths.
+recovery_preflight() {
+    [ "$(git_repo rev-parse --show-toplevel)" = "$repo" ] || return 1
+    git_repo rev-parse --verify refs/heads/main^{commit} >/dev/null || return 1
+    git_repo remote get-url origin >/dev/null || return 1
+    for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
+        operation_path=$(git_repo rev-parse --git-path "$operation") || return 1
+        case "$operation_path" in /*) ;; *) operation_path="$repo/$operation_path" ;; esac
+        if [ -e "$operation_path" ]; then
+            printf 'Refused: a Git operation is in progress (%s)\n' "$operation"
+            return 1
+        fi
+    done
+    others=$(git_repo ls-files --others --directory) || return 1
+    if [ -n "$others" ]; then
+        printf 'Refused: move untracked/ignored paths outside the checkout first:\n%s\n' "$others"
+        return 1
+    fi
+    entries=$(git_repo ls-files --stage) || return 1
+    case "$entries" in *'160000 '*) printf 'Refused: submodules are not supported by recovery\n'; return 1 ;; esac
+    sparse_result=0
+    sparse=$(git_repo config --bool core.sparseCheckout) || sparse_result=$?
+    case "$sparse_result" in 0) ;; 1) sparse=false ;; *) return 1 ;; esac
+    [ "$sparse" = false ] || { printf 'Refused: sparse checkout is not supported\n'; return 1; }
+    ref_guard_supported || { printf 'Refused: recovery requires Git 2.28 or newer\n'; return 1; }
+}
+
+recover() {
+    printf 'WARNING: recovery discards ALL tracked staged/working-tree changes and local main commits absent from fetched origin/main. Other branch tips are preserved.\n'
+    printf 'Use only a trusted origin; stop interactive Git/editors until recovery finishes.\n'
+    git_repo remote get-url origin || return 1
+    recovery_guidance || return 1
+    printf 'Local main commits absent from cached origin/main (fetch may change this list):\n'
+    if git_repo rev-parse --verify refs/remotes/origin/main^{commit} >/dev/null 2>&1; then
+        git_repo log --oneline refs/remotes/origin/main..refs/heads/main || return 1
+    else
+        printf 'No cached origin/main; exact losses will be listed after fetching.\n'
+    fi
+    recovery_preflight || return 1
+    if [ "$dry_run" -eq 1 ] || [ "$discard_changes" -eq 0 ]; then
+        printf 'Preview only: no fetch or mutation. Explicit --discard-changes is required.\n'
+        return 0
+    fi
+    mkdir -p "$state_dir"
+    if ! mkdir "$lock_dir"; then
+        printf 'Refused: cannot acquire update lock: %s\n' "$lock_dir"
+        return 1
+    fi
+    trap cleanup_update EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    printf '%s\n' "$$" > "$lock_dir/pid"
+    rotate_log "$state_dir/update.log"
+    recovery_head=$(git_repo rev-parse HEAD)
+    recovery_branch=$(git_repo symbolic-ref --quiet HEAD || :)
+    before=$(git_repo rev-parse refs/heads/main)
+    recovery_origin=$(git_repo remote get-url origin)
+    fetch_remote || return 1
+    remote=$(git_repo rev-parse --verify refs/remotes/origin/main^{commit}) || return 1
+    recovery_preflight || return 1
+    if [ "$(git_repo remote get-url origin)" != "$recovery_origin" ] ||
+       [ "$(git_repo rev-parse HEAD)" != "$recovery_head" ] ||
+       [ "$(git_repo symbolic-ref --quiet HEAD || :)" != "$recovery_branch" ] ||
+       [ "$(git_repo rev-parse refs/heads/main)" != "$before" ]; then
+        record 'Failed: checkout refs changed during recovery fetch; no discard attempted'
+        return 1
+    fi
+    printf 'WARNING: discarding tracked changes and these local main commits now:\n'
+    git_repo status --short
+    git_repo log --oneline "$remote..refs/heads/main" || return 1
+    for tree in refs/heads/main "$remote"; do
+        tree_entries=$(git_repo ls-tree -r "$tree") || return 1
+        case "$tree_entries" in *'160000 '*) printf 'Refused: target contains submodules\n'; return 1 ;; esac
+    done
+    prepare_ref_guard || return 1
+    # Never reset the branch from which recovery was requested.
+    git_repo switch --discard-changes --no-overwrite-ignore main || return 1
+    [ "$(git_repo symbolic-ref --quiet HEAD)" = refs/heads/main ] || return 1
+    recovery_preflight || return 1
+    git_guarded reset --hard "$remote" || return 1
+    [ "$(git_repo symbolic-ref --quiet HEAD)" = refs/heads/main ] || return 1
+    [ "$(git_repo rev-parse refs/heads/main)" = "$remote" ] || return 1
+    clean_checkout || return 1
+    record "Recovered: main -> $remote"
+}
+
 status() {
     printf 'Repository: %s\n' "$repo"
     printf 'Branch: %s\n' "$(git_repo symbolic-ref --quiet --short HEAD || printf 'detached HEAD')"
@@ -450,6 +564,7 @@ status() {
 # All functions and this dispatch are parsed before update may replace this file.
 case "$action" in
     update) update ;;
+    recover) recover ;;
     status) status ;;
     enable)
         eligibility=0

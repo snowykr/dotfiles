@@ -99,7 +99,23 @@ Logs and the update lock live outside the repository at `${XDG_STATE_HOME:-$HOME
 
 Keep machine-specific shell changes in `~/.zshrc.local` or `~/.bashrc.local` rather than editing the tracked files.
 
-The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Maintenance never discards plugin-lock changes for you.
+The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Unattended maintenance never discards plugin-lock changes; explicit `recover --discard-changes` discards them along with all other tracked edits.
+
+### Explicit manual recovery
+
+Unattended `update` never invokes recovery. When it stops, diagnostics list checkout changes and print a shell-quoted recovery command for the actual installed path and state directory. Review/back up those changes first, including any staged residue from a rejected mid-update race.
+
+```sh
+"$HOME/.dotfiles/maintain.sh" recover                       # Read-only warning/preview; no fetch
+"$HOME/.dotfiles/maintain.sh" recover --discard-changes --dry-run # Still strictly read-only
+"$HOME/.dotfiles/maintain.sh" recover --discard-changes     # Explicit destructive acknowledgement
+```
+
+**Recovery discards all tracked staged/working-tree edits and local `main` commits absent from freshly fetched `origin/main`.** It warns before mutation, fetches with the update watchdog, switches explicitly to the existing `main`, then resets only `main` to the verified fetched commit. It does not create/delete branches or reset the branch you started on. Fetch failure leaves your checkout work intact. Trust the configured `origin` before acknowledging: its configuration and scripts will replace yours.
+
+Recovery shares the update lock and cleanup, disables user hooks, and guards reset reference transactions. It refuses in-progress Git operations, missing `main`, sparse checkouts, submodules, and **any untracked or ignored paths**, even noncolliding ones. Move those paths outside the checkout yourself first; recovery never runs `git clean`. Preview neither fetches nor writes refs, index, state, logs or locks; its commit list uses cached upstream history.
+
+Stop editors and interactive Git operations before recovery. The maintenance lock does not exclude those processes; preflight checks and reference guards are not atomic worktree protection. Concurrent external writes/switches can still cause a partial failure, so do not race recovery. A refusal after switching may leave you on `main`; inspect rather than retrying blindly.
 
 ### Scheduling
 

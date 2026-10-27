@@ -602,6 +602,104 @@ shell/common.sh'
 git -C "$checkout" diff --cached --exit-code "$latest" --
 git -C "$checkout" diff --exit-code --
 
+# Recover the actual staged residue above, preserving the non-main branch tip.
+run_maintain recover > "$root/recovery-preview"
+assert_eq "$(git -C "$checkout" branch --show-current)" mid-race
+assert_eq "$(git -C "$checkout" diff --cached --name-only)" 'ignored-local.txt
+shell/common.sh'
+run_maintain recover --discard-changes > "$root/recovery-race"
+assert_eq "$(git -C "$checkout" branch --show-current)" main
+assert_eq "$(git -C "$checkout" rev-parse mid-race)" "$old"
+assert_eq "$(git -C "$checkout" rev-parse main)" "$latest"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+[ ! -e "$state_home/dotfiles/update.lock" ]
+
+for recovery_case in preview dirty clean network untracked ignored locked operation missing-main; do
+    new_checkout "recover-$recovery_case"
+    git -C "$checkout" reset -q --hard "$old"
+    case "$recovery_case" in
+        preview|dirty|network) printf 'user tracked edit\n' >> "$checkout/shell/common.sh" ;;
+        untracked) printf 'preserve\n' > "$checkout/local.txt" ;;
+        ignored) printf 'preserve\n' > "$checkout/ignored-local.txt" ;;
+        locked) mkdir -p "$state_home/dotfiles/update.lock"; printf 'owner\n' > "$state_home/dotfiles/update.lock/pid" ;;
+        operation) printf '%s\n' "$latest" > "$checkout/.git/MERGE_HEAD" ;;
+        missing-main) git -C "$checkout" branch -m work ;;
+    esac
+    if [ "$recovery_case" = network ]; then git -C "$checkout" remote set-url origin "$root/missing.git"; fi
+    saved_status=$(git -C "$checkout" status --porcelain --ignored)
+    saved_contents=$(cat "$checkout/shell/common.sh")
+    cp "$checkout/.git/index" "$root/recover-index"
+    case "$recovery_case" in
+        preview)
+            run_maintain recover > "$root/recover-preview"
+            run_maintain recover --discard-changes --dry-run > "$root/recover-dry"
+            cmp "$checkout/.git/index" "$root/recover-index"
+            [ ! -e "$checkout/.git/FETCH_HEAD" ]
+            [ ! -e "$state_home" ] ;;
+        dirty|clean)
+            # A clean but divergent main must also be deliberately reset.
+            git -C "$checkout" commit -q --allow-empty -m 'local main commit'
+            run_maintain recover --discard-changes > "$root/recover-$recovery_case"
+            assert_eq "$(git -C "$checkout" rev-parse main)" "$latest"
+            assert_eq "$(git -C "$checkout" status --porcelain)" ''
+            [ ! -e "$state_home/dotfiles/update.lock" ]
+            continue ;;
+        *)
+            if run_maintain recover --discard-changes > "$root/recover-$recovery_case" 2>&1; then
+                printf 'Recovery should refuse %s\n' "$recovery_case" >&2; exit 1
+            fi ;;
+    esac
+    assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$old"
+    assert_eq "$(git -C "$checkout" status --porcelain --ignored)" "$saved_status"
+    assert_eq "$(cat "$checkout/shell/common.sh")" "$saved_contents"
+    case "$recovery_case" in
+        untracked) assert_eq "$(cat "$checkout/local.txt")" preserve ;;
+        ignored) assert_eq "$(cat "$checkout/ignored-local.txt")" preserve ;;
+        locked) assert_eq "$(cat "$state_home/dotfiles/update.lock/pid")" owner ;;
+        *) [ ! -e "$state_home/dotfiles/update.lock" ] ;;
+    esac
+done
+
+# The printed command must work for the actual path, including shell metacharacters.
+new_checkout "recover space ' quote"
+printf 'edit\n' >> "$checkout/shell/common.sh"
+run_maintain update > "$root/recover-command"
+command_line=$(sed -n '/^  XDG_STATE_HOME=/p' "$root/recover-command")
+[ -n "$command_line" ]
+/bin/sh -c "$command_line" > "$root/recover-command-result"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+
+# Replay must retain the original XDG base when dotfiles itself is a symlink.
+new_checkout "recover-state-symlink"
+state_destination="$root/recovery-storage"
+mkdir -p "$state_home" "$state_destination"
+ln -s "$state_destination" "$state_home/dotfiles"
+printf 'edit\n' >> "$checkout/shell/common.sh"
+run_maintain update > "$root/recover-symlink-command"
+command_line=$(sed -n '/^  XDG_STATE_HOME=/p' "$root/recover-symlink-command")
+[ -n "$command_line" ]
+# The replay must honor an existing lock at the original physical destination.
+mkdir "$state_destination/update.lock"
+printf 'original owner\n' > "$state_destination/update.lock/pid"
+if /bin/sh -c "$command_line" > "$root/recover-symlink-locked" 2>&1; then
+    printf 'Replayed recovery must honor the original state lock\n' >&2; exit 1
+fi
+assert_eq "$(cat "$state_destination/update.lock/pid")" 'original owner'
+[ -n "$(git -C "$checkout" status --porcelain)" ]
+[ ! -e "$state_destination/dotfiles" ]
+rm -rf "$state_destination/update.lock"
+/bin/sh -c "$command_line" > "$root/recover-symlink-result"
+assert_eq "$(git -C "$checkout" status --porcelain)" ''
+case "$(cat "$state_destination/update.log")" in *'Recovered: main -> '*) ;; *) exit 1 ;; esac
+[ ! -e "$state_destination/update.lock" ]
+[ ! -e "$state_destination/dotfiles" ]
+[ -L "$state_home/dotfiles" ]
+
+# A root XDG base stays '/' in guidance; preview must not write there.
+XDG_STATE_HOME=/ /bin/sh "$checkout/maintain.sh" recover --dry-run > "$root/recover-root-preview"
+command_line=$(sed -n '/^  XDG_STATE_HOME=/p' "$root/recover-root-preview")
+case "$command_line" in "  XDG_STATE_HOME='/' /bin/sh "*) ;; *) exit 1 ;; esac
+
 # A merge that bypasses the guard must never be reported as a verified update.
 case_name=unguarded
 checkout="$root/checkouts/$case_name"
