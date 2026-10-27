@@ -87,9 +87,11 @@ Updates operate on the actual installed repository path, not a hardcoded `~/.dot
 - Local commits ahead of or diverged from upstream, including upstream rewrites: skip.
 - Network/authentication failure: record an error and retry at the next scheduled run.
 - Concurrent updates: only one obtains the update lock.
-- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching.
+- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching, and the checkout and merged reference are bound to `main` while the fast-forward runs.
 
-The update lock serializes maintenance runs, **not interactive Git commands**. Branch checks and Git's checkout/ref mutation are not atomic: a same-commit branch switch in the final check-to-merge window can still advance the other branch. This is a concurrency limitation, not a guaranteed safe skip. Disable scheduling and confirm no update is running before changing branches in the installed checkout; use a separate clone for development.
+The update lock serializes maintenance runs, **not interactive Git commands**, so a branch switch can still overlap an update. The fast-forward is therefore bound to the checkout that was verified: a generated `reference-transaction` hook (Git 2.29 or newer) admits only the exact reference updates of this one fast-forward. A switch away from `main` before Git replaces files aborts the run with `Skipped: ... nothing was changed`; a switch after that point is refused as well, so **no branch other than `main` is ever advanced by maintenance**. In that rarer case the update is reported as a failure rather than a skip, because Git may already have replaced files: no branch was fast-forwarded and no local work was deleted, but inspect the checkout before continuing.
+
+Every update also re-verifies that the checkout is still `main` after a successful fast-forward. Below Git 2.29 the guard is unavailable, so maintenance skips the update and asks for a manual `maintain.sh update` instead of merging unguarded. Interactive Git use in an installed checkout is still discouraged: use a separate clone for development and confirm no update is running before changing branches there.
 
 There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations, but this is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
 
