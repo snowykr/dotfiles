@@ -80,20 +80,20 @@ To review or apply macOS preferences separately:
 
 ### Update safety
 
-Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. Fast-forward eligibility requires a clean `main` checkout targeting `origin/main`.
+Updates operate on the actual installed repository path, not a hardcoded `~/.dotfiles` path. GitHub `origin/main` is the source of configuration; fast-forward eligibility requires a clean `main` checkout targeting it. Keep the installed checkout on `main` and do not switch branches while maintenance is running. Use a separate clone for development.
 
 - Modified, staged or untracked files: skip without changing local work.
 - Development branch, detached HEAD or an in-progress Git operation: skip.
 - Local commits ahead of or diverged from upstream, including upstream rewrites: skip.
 - Network/authentication failure: record an error and retry at the next scheduled run.
 - Concurrent updates: only one obtains the update lock.
-- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching, and the checkout and merged reference are bound to `main` while the fast-forward runs.
+- Fetches are bounded by a 90-second watchdog. Branch, cleanliness and HEAD are checked again after fetching, but these checks do not atomically protect the checkout during the fast-forward.
 
-The update lock serializes maintenance runs, **not interactive Git commands**, so a branch switch can still overlap an update. The fast-forward is therefore bound to the checkout that was verified: a generated `reference-transaction` hook (Git 2.29 or newer) admits only the exact reference updates of this one fast-forward. A switch away from `main` before Git replaces files aborts the run with `Skipped: ... nothing was changed`; a switch after that point is refused as well, so **no branch other than `main` is ever advanced by maintenance**. In that rarer case the update is reported as a failure rather than a skip, because Git may already have replaced files: no branch was fast-forwarded and no local work was deleted, but inspect the checkout before continuing.
+The update lock serializes maintenance runs, **not interactive Git commands**. A reference-transaction guard checks the expected refs and that HEAD still names `main` when each transaction is prepared; this is not atomic checkout protection. Observed switches cause a skip or failure, not an automatic branch change. In the tested mid-merge independent-switch case, the switch succeeds and the guard rejects the final reference transaction, leaving both branch tips unchanged but downloaded changes staged in the index and present in the working tree. This residual state is an accepted failure outcome, not a clean-checkout guarantee: maintenance warns you to inspect the checkout manually and does not roll it back. Other interleavings can escape the checks, and there is no universal guarantee that refs or files remain unchanged. Disable scheduling and confirm no update is running before switching branches in the installed checkout.
 
-Every update also re-verifies that the checkout is still `main` after a successful fast-forward. Below Git 2.29 the guard is unavailable, so maintenance skips the update and asks for a manual `maintain.sh update` instead of merging unguarded. Interactive Git use in an installed checkout is still discouraged: use a separate clone for development and confirm no update is running before changing branches there.
+Every update also re-verifies that the checkout is still `main` after a successful fast-forward. Below Git 2.28 the guard is unavailable, so maintenance skips the update in both real and preview runs instead of merging unguarded; upgrade Git, or fast-forward manually with `git -C <repo> pull --ff-only`. Interactive Git use in an installed checkout is still discouraged: use a separate clone for development and confirm no update is running before changing branches there.
 
-There is no automatic stash, reset, rebase or branch switch. Git hooks are disabled for maintenance operations, but this is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
+There is no automatic stash, reset, rollback, rebase or branch switch. User Git hooks are disabled for maintenance operations; the fast-forward uses only the generated reference-transaction guard. This is not a sandbox. Use only a trusted `origin`: fetched shell and app configuration will be used when those programs next load it, and the fetched `maintain.sh` will execute unattended on the next scheduled run.
 
 Logs and the update lock live outside the repository at `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles`. Update and macOS scheduler logs rotate at 64 KiB, keeping one previous file. If an updater is force-killed or the machine loses power, `status` can report a stale lock. Confirm no update is running before removing the reported `update.lock` directory; maintenance does not steal a lock from another process.
 

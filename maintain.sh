@@ -68,8 +68,8 @@ git_guarded() {
     git -c core.hooksPath="$guard_dir" -c core.fsmonitor=false -C "$repo" "$@"
 }
 
-# The reference-transaction hook binds the fast-forward to the verified branch,
-# which needs hooks that report a transaction (Git 2.29).
+# The reference-transaction hook checks the fast-forward's refs and current branch.
+# Git documents that hook from 2.28 onwards.
 ref_guard_supported() {
     version_line=$(git_repo version) || return 2
     version=${version_line#git version }
@@ -79,14 +79,13 @@ ref_guard_supported() {
     case "$major" in ''|*[!0-9]*) return 2 ;; esac
     case "$minor" in ''|*[!0-9]*) return 2 ;; esac
     if [ "$major" -gt 2 ]; then return 0; fi
-    if [ "$major" -eq 2 ] && [ "$minor" -ge 29 ]; then return 0; fi
+    if [ "$major" -eq 2 ] && [ "$minor" -ge 28 ]; then return 0; fi
     return 1
 }
 
-# A switch to another branch between the eligibility check and the checkout
-# would otherwise fast-forward that branch. The guard admits only the exact
-# transactions of this fast-forward, and refuses a checkout that is no longer
-# main before Git replaces any file.
+# Admit only the expected fast-forward transactions while HEAD is main.
+# This is not an atomic checkout lock: a later switch can occur after this
+# check, and rejecting a final ref transaction cannot undo index/worktree writes.
 prepare_ref_guard() {
     guard_dir=$lock_dir/ref-guard
     mkdir -p "$guard_dir" || return 1
@@ -103,30 +102,41 @@ reject() {
 }
 { IFS=' ' read -r expected_before expected_remote; } < "$dir/expected" || reject unexpected
 [ -n "$expected_before" ] && [ -n "$expected_remote" ] || reject unexpected
-zeros=0000000000000000000000000000000000000000
+zeros=$(printf '%*s' "${#expected_before}" '' | tr ' ' 0)
 orig_lines=0
 main_lines=0
+head_lines=0
+auto_lines=0
 while IFS=' ' read -r old new ref; do
-    [ -n "$ref" ] || continue
+    [ -n "$ref" ] || reject unexpected
+    case "$old$new" in *[!0-9a-f]*) reject unexpected ;; esac
+    [ "${#old}" -eq "${#expected_before}" ] && [ "${#new}" -eq "${#expected_before}" ] || reject unexpected
     case "$ref" in
         AUTO_MERGE)
-            [ "$old" = "$zeros" ] && [ "$new" = "$zeros" ] || reject unexpected ;;
+            [ "$old" = "$zeros" ] && [ "$new" = "$zeros" ] || reject unexpected
+            auto_lines=$((auto_lines + 1)) ;;
         ORIG_HEAD)
             [ "$new" = "$expected_before" ] || reject unexpected
             orig_lines=$((orig_lines + 1)) ;;
         HEAD|refs/heads/main)
             [ "$old" = "$expected_before" ] && [ "$new" = "$expected_remote" ] || reject unexpected
-            main_lines=$((main_lines + 1)) ;;
+            case "$ref" in
+                HEAD) head_lines=$((head_lines + 1)) ;;
+                refs/heads/main) main_lines=$((main_lines + 1)) ;;
+            esac ;;
         *) reject unexpected ;;
     esac
 done
-[ "$orig_lines" -le 1 ] || reject unexpected
-[ "$main_lines" -le 2 ] || reject unexpected
+case "$orig_lines:$auto_lines:$main_lines:$head_lines" in
+    1:0:0:0|0:1:0:0|0:0:1:0|0:0:1:1) ;;
+    *) reject unexpected ;;
+esac
 branch=$(git symbolic-ref --quiet HEAD 2>/dev/null) || branch=
 if [ "$branch" != refs/heads/main ]; then
     if [ "$main_lines" -eq 0 ]; then reject branch-switched; fi
     reject commit-race
 fi
+if [ "$main_lines" -gt 0 ]; then : > "$dir/admitted" || exit 1; fi
 exit 0
 REF_GUARD
     chmod 700 "$guard_dir/reference-transaction" || return 1
@@ -296,6 +306,14 @@ update() {
         inspection_result=0
         eligible_branch && clean_checkout || inspection_result=$?
         case "$inspection_result" in 0) ;; 1) return 0 ;; *) return 1 ;; esac
+        guard_result=0
+        ref_guard_supported || guard_result=$?
+        case "$guard_result" in
+            0) ;;
+            1) printf 'Would skip: Git 2.28 or newer is required to bind the fast-forward to main\n'
+               return 0 ;;
+            *) printf 'Failed: could not inspect the Git version\n'; return 1 ;;
+        esac
         printf 'Would fetch origin/main and fast-forward this clean main checkout\n'
         return
     fi
@@ -352,7 +370,7 @@ update() {
     ref_guard_supported || guard_result=$?
     case "$guard_result" in
         0) ;;
-        1) record 'Skipped: Git 2.29 or newer is required to bind the fast-forward to main; run maintain.sh update manually'
+        1) record 'Skipped: Git 2.28 or newer is required to bind the fast-forward to main; upgrade Git, or fast-forward manually with git -C <repo> pull --ff-only'
            return 0 ;;
         *) record 'Failed: could not inspect the Git version'; return 1 ;;
     esac
@@ -361,8 +379,12 @@ update() {
         return 1
     fi
     if git_guarded merge --ff-only --no-edit --no-overwrite-ignore "$remote" > "$lock_dir/merge.log" 2>&1; then
+        if [ ! -f "$guard_dir/admitted" ]; then
+            record 'Failed: the fast-forward was not verified by the reference guard; main may have advanced, so inspect the checkout before continuing'
+            return 1
+        fi
         if [ "$(git_repo symbolic-ref --quiet HEAD 2>/dev/null || :)" != refs/heads/main ]; then
-            record 'Failed: the checkout left main during the update; files may have been replaced even though no branch was fast-forwarded by this run'
+            record 'Failed: the checkout is no longer main after the update; main may have advanced and files were replaced, so inspect the checkout before continuing'
             return 1
         fi
         record "Updated: $before -> $remote"
@@ -370,14 +392,23 @@ update() {
     else
         case "$(cat "$guard_dir/rejected" 2>/dev/null || :)" in
             branch-switched)
-                record 'Skipped: the checkout switched away from main before the update; nothing was changed'
-                return 0 ;;
-            commit-race)
-                record 'Failed: the checkout switched away from main during the update; the fast-forward was refused and no branch was advanced, but the working tree may already hold the fetched files. Inspect the checkout before continuing.'
+                # Skip only when the observed checkout is clean at the original commit.
+                verified=1
+                head_after=$(git_repo rev-parse HEAD 2>/dev/null) || verified=0
+                [ "$head_after" = "$before" ] || verified=0
+                if [ "$verified" -eq 1 ]; then
+                    status_after=$(git_repo status --porcelain --untracked-files=all) || verified=0
+                    [ -z "$status_after" ] || verified=0
+                fi
+                if [ "$verified" -eq 1 ]; then
+                    record 'Skipped: the checkout switched away from main; the checkout is clean at the original commit'
+                    return 0
+                fi
+                record 'Failed: the checkout switched away from main during the update; the reference guard refused the transaction, but the index and working tree may already hold the fetched changes. Inspect the checkout before continuing.'
                 tail -c 16384 "$lock_dir/merge.log" | tee -a "$state_dir/update.log"
                 return 1 ;;
-            unexpected)
-                record 'Failed: an unexpected Git reference update was refused; inspect the checkout'
+            commit-race|unexpected)
+                record 'Failed: the checkout switched away from main during the update, or an unexpected reference update occurred; the reference guard refused the transaction, but the index and working tree may already hold the fetched changes. Inspect the checkout before continuing.'
                 tail -c 16384 "$lock_dir/merge.log" | tee -a "$state_dir/update.log"
                 return 1 ;;
         esac
