@@ -105,13 +105,75 @@ The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and i
 
 Unattended `update` never invokes recovery. When it stops, diagnostics list checkout changes and print a shell-quoted recovery command for the actual installed path and state directory. Review/back up those changes first, including any staged residue from a rejected mid-update race.
 
+#### 1. Select the installed checkout and inspect it
+
+Use the exact repository path printed by the update diagnostic, not a development clone. For installations in `~/.dotfiles-main`:
+
 ```sh
-"$HOME/.dotfiles/maintain.sh" recover                       # Read-only warning/preview; no fetch
-"$HOME/.dotfiles/maintain.sh" recover --discard-changes --dry-run # Still strictly read-only
-"$HOME/.dotfiles/maintain.sh" recover --discard-changes     # Explicit destructive acknowledgement
+DOTFILES_REPO="$HOME/.dotfiles-main"
+/bin/sh "$DOTFILES_REPO/maintain.sh" status
+/bin/sh "$DOTFILES_REPO/maintain.sh" recover
 ```
 
-**Recovery discards all tracked staged/working-tree edits and local `main` commits absent from freshly fetched `origin/main`.** It warns before mutation, fetches with the update watchdog, switches explicitly to the existing `main`, then resets only `main` to the verified fetched commit. It does not create/delete branches or reset the branch you started on. Fetch failure leaves your checkout work intact. Trust the configured `origin` before acknowledging: its configuration and scripts will replace yours.
+For an installation in `~/.dotfiles`, change `DOTFILES_REPO` accordingly. If the diagnostic includes `XDG_STATE_HOME=...`, retain that same value for every command below so they share the scheduler's lock and logs. Plain `recover` only previews: it does **not** repair anything or fetch new history.
+
+#### 2. Pause scheduling and back up work
+
+Stop editors and interactive Git operations in this checkout. Inspect `status` and wait for any active maintenance to finish **before** disabling scheduling, especially on macOS: unloading the LaunchAgent can interrupt its running updater. If automatic maintenance is enabled, pause it once the active run has finished:
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" disable
+/bin/sh "$DOTFILES_REPO/maintain.sh" status
+```
+
+On Linux, disabling the timer leaves an already-running update service running. On macOS, `launchctl bootout` unloads the job and may interrupt it. Disabling alone is **not proof that maintenance has finished**: recheck status, process/lock ownership, and checkout state before proceeding. If an update started between your checks, wait for it or inspect an interrupted run; do not remove an active lock to force recovery. Copy any work you need to keep **outside this checkout**, including staged edits, Neovim's tracked `lazy-lock.json`, and local commits. A full checkout backup including `.git` preserves more than a plain `git diff`, which does not include every kind of local work. Recovery makes no automatic backup.
+
+#### 3. Preview, then explicitly discard
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" recover --discard-changes --dry-run
+```
+
+Read the affected paths, configured `origin`, and local-main commit list. The preview uses cached remote history; actual recovery fetches again and prints the updated commit-loss list before discarding. **The command below is destructive and does not ask for another interactive confirmation:**
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" recover --discard-changes
+```
+
+The `--discard-changes` flag is your acknowledgement. Never add this command to the automatic scheduler.
+
+#### 4. Verify and resume
+
+Successful recovery prints `Recovered: main -> <commit>`. Check the result:
+
+```sh
+git -C "$DOTFILES_REPO" branch --show-current  # main
+git -C "$DOTFILES_REPO" status --short         # empty
+/bin/sh "$DOTFILES_REPO/maintain.sh" status
+```
+
+If scheduling was enabled before you paused it, restore it only after verifying recovery:
+
+```sh
+/bin/sh "$DOTFILES_REPO/maintain.sh" enable
+```
+
+Open a new shell or reload/restart affected applications to use the recovered configuration.
+
+#### Refusals and partial failures
+
+| Message or condition | What to do |
+| --- | --- |
+| Untracked/ignored paths | Move the listed paths outside the checkout; even noncolliding files cause refusal. Do not delete them blindly. |
+| Update lock exists | Wait for the running operation. For a stale lock, follow the ownership checks in **Update safety**; do not bypass an active lock. |
+| Git operation in progress | Finish or deliberately abort that operation yourself after reviewing its changes. |
+| Missing `main`, sparse checkout, or submodules | This recovery command does not support that checkout; inspect it manually. |
+| Fetch/authentication/network failure | Fix connectivity or credentials; fetch failure occurs before tracked edits are discarded. |
+| Failure after switching/reset starts | Some changes may already have been discarded and the branch may be `main`. Inspect status and your backup before retrying; there is no automatic rollback. |
+
+#### Destructive scope and limits
+
+**Recovery discards all tracked staged/working-tree edits and local `main` commits absent from freshly fetched `origin/main`.** It warns before mutation, fetches with the update watchdog, switches explicitly to the existing `main`, then resets only `main` to the verified fetched commit. It does not create/delete branches or reset a starting non-`main` branch tip; `main` is reset even when you started on `main`. Uncommitted tracked edits are discarded regardless of the starting branch. Fetch failure leaves your checkout work intact. Trust the configured `origin` before acknowledging: its configuration and scripts will replace yours.
 
 Recovery shares the update lock and cleanup, disables user hooks, and guards reset reference transactions. It refuses in-progress Git operations, missing `main`, sparse checkouts, submodules, and **any untracked or ignored paths**, even noncolliding ones. Move those paths outside the checkout yourself first; recovery never runs `git clean`. Preview neither fetches nor writes refs, index, state, logs or locks; its commit list uses cached upstream history.
 
