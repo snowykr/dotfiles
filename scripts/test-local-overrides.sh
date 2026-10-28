@@ -40,14 +40,17 @@ check_shell() {
         printf 'Skipped: %s is not installed\n' "$shell"
         return 0
     fi
+    # A distro login banner may precede the marker, so only the final line is ours.
     printf 'DOTFILES_LOCAL_MARKER=from-local\n' > "$home/.config/dotfiles/local/shell.sh"
-    output=$(HOME="$home" "$shell" -i -c 'printf %s "${DOTFILES_LOCAL_MARKER:-missing}"' 2>/dev/null) ||
+    output=$(HOME="$home" "$shell" -i -c 'printf "%s\\n" "${DOTFILES_LOCAL_MARKER:-missing}"' 2>/dev/null) ||
         fail "$shell failed to load the dotfiles configuration"
-    [ "$output" = 'from-local' ] || fail "$shell did not load the local override (got: $output)"
+    marker=$(printf '%s\n' "$output" | tail -n 1)
+    [ "$marker" = 'from-local' ] || fail "$shell did not load the local override (got: $output)"
     rm "$home/.config/dotfiles/local/shell.sh"
-    output=$(HOME="$home" "$shell" -i -c 'printf %s "${DOTFILES_LOCAL_MARKER:-missing}"' 2>/dev/null) ||
+    output=$(HOME="$home" "$shell" -i -c 'printf "%s\\n" "${DOTFILES_LOCAL_MARKER:-missing}"' 2>/dev/null) ||
         fail "$shell failed when the local override was absent"
-    [ "$output" = 'missing' ] || fail "$shell did not tolerate a missing local override (got: $output)"
+    marker=$(printf '%s\n' "$output" | tail -n 1)
+    [ "$marker" = 'missing' ] || fail "$shell did not tolerate a missing local override (got: $output)"
 }
 check_shell zsh
 check_shell bash
