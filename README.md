@@ -5,7 +5,7 @@ Personal shell, editor, terminal, and platform-aware macOS/Linux setup.
 Two entrypoints have separate responsibilities:
 
 - **`initialize.sh` configures the computer.** Run it on a new machine or to reapply installation changes.
-- **`maintain.sh` keeps the installed checkout up to date.** It never runs initialization, installs packages, changes Git identity, applies macOS preferences, or invokes sudo.
+- **`maintain.sh` keeps the installed checkout up to date.** It never runs initialization, installs packages, changes Git identity, applies macOS preferences, or invokes sudo. Its `local` subcommand only scaffolds the machine-local override files described below.
 
 ## Initialize
 
@@ -97,7 +97,7 @@ There is no automatic stash, reset, rollback, rebase or branch switch. User Git 
 
 Logs and the update lock live outside the repository at `${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles`. Update and macOS scheduler logs rotate at 64 KiB, keeping one previous file. If an updater is force-killed or the machine loses power, `status` can report a stale lock. Confirm no update is running before removing the reported `update.lock` directory; maintenance does not steal a lock from another process.
 
-Keep machine-specific shell changes in `~/.zshrc.local` or `~/.bashrc.local` rather than editing the tracked files.
+Keep machine-specific shell changes in `~/.config/dotfiles/local/shell.sh` rather than editing the tracked files; run `maintain.sh local` to create it (see Per-machine overrides).
 
 The Neovim plugin lockfile is deliberately tracked source. `:Lazy update` (and install/clean operations that rewrite the lockfile) can modify it through the configuration symlink, so maintenance then pauses just as it does for any other local source change. Review and commit the intended lockfile changes through the repository workflow, or deliberately discard only those changes after review, before automatic checkout updates can resume. Unattended maintenance never discards plugin-lock changes; explicit `recover --discard-changes` discards them along with all other tracked edits.
 
@@ -201,6 +201,36 @@ Both schedule `/bin/sh <installed-repo>/maintain.sh update`, without sudo. Absol
 
 The maintenance command never calls initialization after updating. Updating linked files does not forcibly reload running shells or applications.
 
+## Per-machine overrides
+
+Machine-specific settings live outside the checkout, so updates never overwrite them and never have to be blocked to keep them:
+
+```sh
+"$HOME/.dotfiles/maintain.sh" local
+"$HOME/.dotfiles/maintain.sh" local --dry-run
+```
+
+`local` creates `~/.config/dotfiles/local/` and fills in only the missing files; existing content is never rewritten, and `--dry-run` reports what it would create without writing. It never touches the checkout, never reads maintenance state, and never discards changes, so it also works on a dirty or out-of-date installation. The path is always `~/.config/dotfiles/local`, independent of `XDG_CONFIG_HOME`, because the Ghostty include cannot expand environment variables. A `~/.config/dotfiles/local` that is a symlink or a non-directory is refused rather than followed.
+
+| File | Loaded by | Effect |
+| --- | --- | --- |
+| `shell.sh` | `shell/zshrc`, `shell/bashrc` | sourced last, after every dotfiles shell setting; both shells source it, so keep it POSIX `sh` |
+| `nvim.lua` | `config/nvim/init.lua` via `config/local.lua` | run last in `init.lua`, after options, keymaps and the lazy.nvim plugin manager |
+| `ghostty.conf` | `config/ghostty/config` (`config-file = ?~/.config/dotfiles/local/ghostty.conf`) | included after the directives above it |
+
+Each hook is a file test, so a missing file is not an error and unused templates can be deleted. Because each runs last, later settings win: shell options, variables and aliases; Neovim `vim.opt`, `vim.keymap.set` and autocommands; Ghostty directives. Neovim plugins that load lazily can still change options after `nvim.lua` runs; confirm the effective value with `:verbose set` and use an `after/` plugin file for a setting a plugin keeps resetting. An error in `nvim.lua` surfaces at startup instead of being ignored.
+
+Earlier versions of this repository sourced `$HOME/.zshrc.local` and `$HOME/.bashrc.local`; those files are no longer read. Merge their contents into `shell.sh` by hand if both exist, or copy them with:
+
+```sh
+mkdir -p "$HOME/.config/dotfiles/local"
+for f in "$HOME/.zshrc.local" "$HOME/.bashrc.local"; do
+    if [ -f "$f" ]; then cat "$f" >> "$HOME/.config/dotfiles/local/shell.sh"; fi
+done
+```
+
+Editing the linked files under `~/.dotfiles` is not an override: it makes the checkout dirty and stops unattended updates. Change this repository for anything it should own, and keep machine-specific settings in these three files.
+
 ## Contents
 
 - `initialize.sh` / `maintain.sh` — the two public entrypoints.
@@ -217,6 +247,7 @@ sh scripts/test-initialize.sh
 sh scripts/test-maintain.sh
 sh scripts/test-scheduler.sh
 sh scripts/test-install-tools.sh
+sh scripts/test-local-overrides.sh
 nvim --headless -u NONE -l scripts/test-nvim.lua
 ```
 

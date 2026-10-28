@@ -2,50 +2,17 @@
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-state_base=${XDG_STATE_HOME:-"$HOME/.local/state"}
-state_dir="$state_base/dotfiles"
-case "$state_dir" in
-    /*) ;;
-    *) printf 'XDG_STATE_HOME must be an absolute path\n' >&2; exit 2 ;;
-esac
-# Reject parent traversal before resolving missing ancestors: lexical normalization
-# could otherwise expose a symlink that has not been physically resolved.
-case "$state_dir" in
-    */../*|*/..) printf 'Maintenance state path must not contain parent traversal\n' >&2; exit 2 ;;
-esac
-# Resolve existing parent symlinks without creating anything, including on previews.
-# This also catches /var vs /private/var and symlinked XDG paths into the checkout.
-state_parent=$state_dir
-state_suffix=
-while [ ! -d "$state_parent" ]; do
-    if [ -e "$state_parent" ] || [ -L "$state_parent" ]; then
-        printf 'Maintenance state path is not a directory: %s\n' "$state_parent" >&2
-        exit 2
-    fi
-    state_suffix="/${state_parent##*/}$state_suffix"
-    state_parent=${state_parent%/*}
-    [ -n "$state_parent" ] || state_parent=/
-done
-state_parent=$(CDPATH= cd -- "$state_parent" && pwd -P)
-state_dir=$(printf '%s\n' "$state_parent$state_suffix" | awk '
-    {
-        count = split($0, part, "/"); depth = 0
-        for (i = 1; i <= count; i++) {
-            if (part[i] == "" || part[i] == ".") continue
-            if (part[i] == "..") { if (depth > 0) depth--; continue }
-            stack[++depth] = part[i]
-        }
-        for (i = 1; i <= depth; i++) printf "/%s", stack[i]
-        if (depth == 0) printf "/"
-        printf "\n"
-    }
-')
-case "$state_dir" in
-    "$repo"|"$repo"/*) printf 'Maintenance state must be outside the repository\n' >&2; exit 2 ;;
-esac
+state_dir=
+
+# Checked before any expansion below so an unset HOME reports itself instead of
+# aborting later with a bare unbound-variable error under set -u.
+if [ -z "${HOME:-}" ]; then
+    printf 'HOME is not set\n' >&2
+    exit 2
+fi
 
 usage() {
-    printf 'Usage: %s [update|recover|status|enable|disable] [--dry-run] [--discard-changes]\n' "$0"
+    printf 'Usage: %s [update|recover|status|enable|disable|local] [--dry-run] [--discard-changes]\n' "$0"
 }
 
 action=${1:-status}
@@ -61,6 +28,51 @@ for option in "$@"; do
         *) usage >&2; exit 2 ;;
     esac
 done
+
+# local writes only under $HOME, so state-path validation does not apply to it.
+if [ "$action" != local ]; then
+    state_base=${XDG_STATE_HOME:-"$HOME/.local/state"}
+    state_dir="$state_base/dotfiles"
+    case "$state_dir" in
+        /*) ;;
+        *) printf 'XDG_STATE_HOME must be an absolute path\n' >&2; exit 2 ;;
+    esac
+    # Reject parent traversal before resolving missing ancestors: lexical normalization
+    # could otherwise expose a symlink that has not been physically resolved.
+    case "$state_dir" in
+        */../*|*/..) printf 'Maintenance state path must not contain parent traversal\n' >&2; exit 2 ;;
+    esac
+    # Resolve existing parent symlinks without creating anything, including on previews.
+    # This also catches /var vs /private/var and symlinked XDG paths into the checkout.
+    state_parent=$state_dir
+    state_suffix=
+    while [ ! -d "$state_parent" ]; do
+        if [ -e "$state_parent" ] || [ -L "$state_parent" ]; then
+            printf 'Maintenance state path is not a directory: %s\n' "$state_parent" >&2
+            exit 2
+        fi
+        state_suffix="/${state_parent##*/}$state_suffix"
+        state_parent=${state_parent%/*}
+        [ -n "$state_parent" ] || state_parent=/
+    done
+    state_parent=$(CDPATH= cd -- "$state_parent" && pwd -P)
+    state_dir=$(printf '%s\n' "$state_parent$state_suffix" | awk '
+        {
+            count = split($0, part, "/"); depth = 0
+            for (i = 1; i <= count; i++) {
+                if (part[i] == "" || part[i] == ".") continue
+                if (part[i] == "..") { if (depth > 0) depth--; continue }
+                stack[++depth] = part[i]
+            }
+            for (i = 1; i <= depth; i++) printf "/%s", stack[i]
+            if (depth == 0) printf "/"
+            printf "\n"
+        }
+    ')
+    case "$state_dir" in
+        "$repo"|"$repo"/*) printf 'Maintenance state must be outside the repository\n' >&2; exit 2 ;;
+    esac
+fi
 
 # Background work must fail rather than opening authentication prompts.
 export GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GH_PROMPT_DISABLED=1 GIT_OPTIONAL_LOCKS=0
@@ -223,7 +235,7 @@ clean_checkout() {
 
 fetch_pid=
 watchdog_pid=
-lock_dir="$state_dir/update.lock"
+lock_dir=${state_dir:+"$state_dir/update.lock"}
 guard_dir=
 capture_fetch_tree() {
     # Include credential/transport descendants before terminating their parent.
@@ -561,11 +573,73 @@ status() {
     fi
 }
 
+create_local_file() {
+    file=$1
+    header=$2
+    if [ -e "$file" ] || [ -L "$file" ]; then
+        printf 'Kept existing: %s\n' "$file"
+        return 0
+    fi
+    # noclobber makes the create atomic, and the captured message keeps the reason
+    # for a real failure while the caller re-checks the create-then-lose race below.
+    if error=$( { set -C; printf '%s\n' "$header" > "$file"; } 2>&1 ); then
+        printf 'Created: %s\n' "$file"
+        return 0
+    fi
+    if [ -e "$file" ] || [ -L "$file" ]; then
+        printf 'Kept existing: %s\n' "$file"
+        return 0
+    fi
+    printf 'Failed: could not create %s: %s\n' "$file" "${error:-unknown error}" >&2
+    return 1
+}
+
+# Machine-local settings live outside the checkout, so updates never rewrite them.
+local_overrides() {
+    local_dir=$HOME/.config/dotfiles/local
+    printf 'Local override directory: %s\n' "$local_dir"
+    # A symlinked directory could redirect these writes into the checkout.
+    if [ -L "$local_dir" ]; then
+        printf 'Refused: %s is a symlink; use a real directory\n' "$local_dir" >&2
+        return 1
+    fi
+    if [ -e "$local_dir" ] && [ ! -d "$local_dir" ]; then
+        printf 'Refused: %s exists and is not a directory\n' "$local_dir" >&2
+        return 1
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+        for entry in shell.sh nvim.lua ghostty.conf; do
+            if [ -e "$local_dir/$entry" ] || [ -L "$local_dir/$entry" ]; then
+                printf 'Exists: %s\n' "$local_dir/$entry"
+            else
+                printf 'Would create: %s\n' "$local_dir/$entry"
+            fi
+        done
+        return 0
+    fi
+    if ! mkdir -p "$local_dir"; then
+        printf 'Failed: could not create %s\n' "$local_dir" >&2
+        return 1
+    fi
+    result=0
+    create_local_file "$local_dir/shell.sh" \
+        '# Sourced last by shell/zshrc and shell/bashrc. Keep it POSIX sh compatible: both shells source it.' || result=1
+    create_local_file "$local_dir/nvim.lua" \
+        '-- Run last from config/nvim/init.lua, after options, keymaps and the lazy.nvim plugin manager. Plugins that load lazily can still change options afterwards.' || result=1
+    create_local_file "$local_dir/ghostty.conf" \
+        '# Included last by config/ghostty/config. Keep machine-specific Ghostty settings here.' || result=1
+    if [ "$result" -eq 0 ]; then
+        printf 'Maintenance never updates or overwrites these files.\n'
+    fi
+    return "$result"
+}
+
 # All functions and this dispatch are parsed before update may replace this file.
 case "$action" in
     update) update ;;
     recover) recover ;;
     status) status ;;
+    local) local_overrides ;;
     enable)
         eligibility=0
         eligible_branch || eligibility=$?

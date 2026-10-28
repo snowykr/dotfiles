@@ -57,4 +57,7 @@ alias tnw='tmux new-window'
 alias tkw='tmux kill-window'
 
 [ -r "$HOME/.bash_aliases" ] && . "$HOME/.bash_aliases"
-[ -r "$HOME/.bashrc.local" ] && . "$HOME/.bashrc.local"
+# Machine-local overrides live outside this checkout so updates never touch them.
+if [ -f "$HOME/.config/dotfiles/local/shell.sh" ]; then
+    . "$HOME/.config/dotfiles/local/shell.sh"
+fi
