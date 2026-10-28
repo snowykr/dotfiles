@@ -45,7 +45,7 @@ case "$state_dir" in
 esac
 
 usage() {
-    printf 'Usage: %s [update|recover|status|enable|disable] [--dry-run] [--discard-changes]\n' "$0"
+    printf 'Usage: %s [update|recover|status|enable|disable|local] [--dry-run] [--discard-changes]\n' "$0"
 }
 
 action=${1:-status}
@@ -561,11 +561,68 @@ status() {
     fi
 }
 
+create_local_file() {
+    file=$1
+    header=$2
+    if [ -e "$file" ] || [ -L "$file" ]; then
+        printf 'Kept existing: %s\n' "$file"
+        return 0
+    fi
+    if ( set -C; printf '%s\n' "$header" > "$file" ) 2>/dev/null; then
+        printf 'Created: %s\n' "$file"
+        return 0
+    fi
+    if [ -e "$file" ] || [ -L "$file" ]; then
+        printf 'Kept existing: %s\n' "$file"
+        return 0
+    fi
+    printf 'Failed: could not create %s\n' "$file" >&2
+    return 1
+}
+
+# Machine-local settings live outside the checkout, so updates never rewrite them.
+local_overrides() {
+    if [ -z "${HOME:-}" ]; then
+        printf 'Failed: HOME is not set\n' >&2
+        return 1
+    fi
+    local_dir=$HOME/.config/dotfiles/local
+    printf 'Local override directory: %s\n' "$local_dir"
+    if [ -e "$local_dir" ] && [ ! -d "$local_dir" ]; then
+        printf 'Refused: %s exists and is not a directory\n' "$local_dir" >&2
+        return 1
+    fi
+    if [ "$dry_run" -eq 1 ]; then
+        for entry in shell.sh nvim.lua ghostty.conf; do
+            if [ -e "$local_dir/$entry" ] || [ -L "$local_dir/$entry" ]; then
+                printf 'Exists: %s\n' "$local_dir/$entry"
+            else
+                printf 'Would create: %s\n' "$local_dir/$entry"
+            fi
+        done
+        return 0
+    fi
+    if ! mkdir -p "$local_dir"; then
+        printf 'Failed: could not create %s\n' "$local_dir" >&2
+        return 1
+    fi
+    result=0
+    create_local_file "$local_dir/shell.sh" \
+        '# Sourced last by shell/zshrc and shell/bashrc. Keep machine-specific shell settings here.' || result=1
+    create_local_file "$local_dir/nvim.lua" \
+        '-- Loaded last by config/nvim/init.lua, after plugins. Keep machine-specific Neovim settings here.' || result=1
+    create_local_file "$local_dir/ghostty.conf" \
+        '# Included last by config/ghostty/config. Keep machine-specific Ghostty settings here.' || result=1
+    printf 'Maintenance never updates or overwrites these files.\n'
+    return "$result"
+}
+
 # All functions and this dispatch are parsed before update may replace this file.
 case "$action" in
     update) update ;;
     recover) recover ;;
     status) status ;;
+    local) local_overrides ;;
     enable)
         eligibility=0
         eligible_branch || eligibility=$?

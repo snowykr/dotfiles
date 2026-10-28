@@ -65,4 +65,5 @@ if [[ -n "${GHOSTTY_RESOURCES_DIR:-}" || "${TERM_PROGRAM:-}" == ghostty ]]; then
     add-zsh-hook chpwd _ghostty_osc7_cwd
 fi
 
-[[ -f "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
+# Machine-local overrides live outside this checkout so updates never touch them.
+[ -r "$HOME/.config/dotfiles/local/shell.sh" ] && . "$HOME/.config/dotfiles/local/shell.sh"

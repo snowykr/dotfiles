@@ -38,3 +38,7 @@ background-blur = false
 scrollback-limit = 100000000
 window-inherit-working-directory = true
 confirm-close-surface = false
+
+# Machine-local overrides live outside this checkout so updates never touch them.
+# The leading ? makes a missing file harmless.
+config-file = ?~/.config/dotfiles/local/ghostty.conf

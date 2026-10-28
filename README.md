@@ -5,7 +5,7 @@ Personal shell, editor, terminal, and platform-aware macOS/Linux setup.
 Two entrypoints have separate responsibilities:
 
 - **`initialize.sh` configures the computer.** Run it on a new machine or to reapply installation changes.
-- **`maintain.sh` keeps the installed checkout up to date.** It never runs initialization, installs packages, changes Git identity, applies macOS preferences, or invokes sudo.
+- **`maintain.sh` keeps the installed checkout up to date.** It never runs initialization, installs packages, changes Git identity, applies macOS preferences, or invokes sudo. Its `local` subcommand only scaffolds the machine-local override files described below.
 
 ## Initialize
 
@@ -201,6 +201,27 @@ Both schedule `/bin/sh <installed-repo>/maintain.sh update`, without sudo. Absol
 
 The maintenance command never calls initialization after updating. Updating linked files does not forcibly reload running shells or applications.
 
+## Per-machine overrides
+
+Machine-specific settings live outside the checkout, so updates never overwrite them and never have to be blocked to keep them:
+
+```sh
+"$HOME/.dotfiles/maintain.sh" local
+"$HOME/.dotfiles/maintain.sh" local --dry-run
+```
+
+`local` creates `~/.config/dotfiles/local/` and fills in only the missing files; existing content is never rewritten, and `--dry-run` reports what it would create without writing. It never touches the checkout, so it also works on a dirty or out-of-date installation. The path is always `~/.config/dotfiles/local`, independent of `XDG_CONFIG_HOME`, because the Ghostty include cannot expand environment variables.
+
+| File | Loaded by | Effect |
+| --- | --- | --- |
+| `shell.sh` | `shell/zshrc`, `shell/bashrc` | sourced last, after every dotfiles shell setting |
+| `nvim.lua` | `config/nvim/init.lua` via `config/local.lua` | run after plugins are set up |
+| `ghostty.conf` | `config/ghostty/config` (`config-file = ?~/.config/dotfiles/local/ghostty.conf`) | included after the directives above it |
+
+Each hook is a readability check, so a missing file is not an error and unused templates can be deleted. Because each runs last, later settings win: shell options, variables and aliases; Neovim `vim.opt`, `vim.keymap.set` and autocommands; Ghostty directives. An error in `nvim.lua` stops startup visibly instead of being ignored.
+
+Editing the linked files under `~/.dotfiles` is not an override: it makes the checkout dirty and stops unattended updates. Change this repository for anything it should own, and keep machine-specific settings in these three files.
+
 ## Contents
 
 - `initialize.sh` / `maintain.sh` — the two public entrypoints.
@@ -217,6 +238,7 @@ sh scripts/test-initialize.sh
 sh scripts/test-maintain.sh
 sh scripts/test-scheduler.sh
 sh scripts/test-install-tools.sh
+sh scripts/test-local-overrides.sh
 nvim --headless -u NONE -l scripts/test-nvim.lua
 ```
 
