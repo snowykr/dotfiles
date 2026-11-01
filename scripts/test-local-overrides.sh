@@ -139,6 +139,153 @@ grep -q '^Refused: ' "$root/linked.out" || fail 'maintain.sh local did not expla
 [ -L "$linked_home/.config/dotfiles/local" ] || fail 'maintain.sh local replaced the symlinked override directory'
 [ ! -e "$repo/shell.sh" ] || fail 'maintain.sh local wrote into the checkout through a symlink'
 
+# Reject physical destinations inside the checkout, not just a symlink at local/.
+# Use a disposable script checkout so a regression cannot write into this repo.
+boundary_repo="$root/boundary/checkout"
+mkdir -p "$boundary_repo"
+cp "$repo/maintain.sh" "$boundary_repo/maintain.sh"
+
+assert_boundary_refused() {
+    boundary_home=$1
+    for preview in preview real; do
+        set --
+        [ "$preview" != preview ] || set -- --dry-run
+        if HOME="$boundary_home" /bin/sh "$boundary_repo/maintain.sh" local "$@" > "$root/boundary.out" 2>&1; then
+            fail "maintain.sh local accepted an unsafe path ($boundary_home; $preview)"
+        fi
+        grep -q 'must be outside the repository' "$root/boundary.out" ||
+            fail "maintain.sh local did not explain the checkout boundary: $(cat "$root/boundary.out")"
+    done
+}
+
+config_link_home="$root/config-link-home"
+mkdir -p "$config_link_home"
+ln -s "$boundary_repo" "$config_link_home/.config"
+assert_boundary_refused "$config_link_home"
+[ ! -e "$boundary_repo/dotfiles" ] || fail 'local created directories through a linked .config'
+
+dotfiles_link_home="$root/dotfiles-link-home"
+mkdir -p "$dotfiles_link_home/.config"
+ln -s "$boundary_repo" "$dotfiles_link_home/.config/dotfiles"
+assert_boundary_refused "$dotfiles_link_home"
+[ ! -e "$boundary_repo/local" ] || fail 'local created directories through a linked dotfiles parent'
+
+# The same rejection applies when the destination already exists, without edits.
+mkdir -p "$boundary_repo/dotfiles/local"
+printf 'keep my override\n' > "$boundary_repo/dotfiles/local/shell.sh"
+assert_boundary_refused "$config_link_home"
+[ "$(cat "$boundary_repo/dotfiles/local/shell.sh")" = 'keep my override' ] ||
+    fail 'local modified an existing override inside the checkout'
+[ ! -e "$boundary_repo/dotfiles/local/nvim.lua" ] || fail 'local filled a template inside the checkout'
+[ ! -e "$boundary_repo/dotfiles/local/ghostty.conf" ] || fail 'local filled a template inside the checkout'
+
+# A physical destination equal to the checkout must be rejected too.
+exact_repo="$root/exact/local"
+exact_home="$root/exact-home"
+mkdir -p "$exact_repo" "$exact_home/.config"
+cp "$repo/maintain.sh" "$exact_repo/maintain.sh"
+ln -s "$root/exact" "$exact_home/.config/dotfiles"
+for preview in preview real; do
+    set --
+    [ "$preview" != preview ] || set -- --dry-run
+    if HOME="$exact_home" /bin/sh "$exact_repo/maintain.sh" local "$@" > "$root/exact.out" 2>&1; then
+        fail "maintain.sh local accepted the checkout root ($preview)"
+    fi
+    grep -q 'must be outside the repository' "$root/exact.out" || fail 'local did not explain the exact boundary'
+done
+[ ! -e "$exact_repo/shell.sh" ] || fail 'local wrote templates at the checkout root'
+
+# HOME itself can be inside the checkout even without any symlinks.
+assert_boundary_refused "$boundary_repo/home"
+[ ! -e "$boundary_repo/home" ] || fail 'local created HOME inside the checkout'
+
+# Benign ancestor symlinks outside the checkout remain supported, including a
+# sibling sharing the checkout prefix. Preview must not create missing suffixes.
+safe_home="$root/safe-link-home"
+safe_target="$boundary_repo-sibling"
+mkdir -p "$safe_home" "$safe_target"
+ln -s "$safe_target" "$safe_home/.config"
+HOME="$safe_home" /bin/sh "$boundary_repo/maintain.sh" local --dry-run > "$root/safe-preview.out" ||
+    fail 'local rejected a safe ancestor symlink during preview'
+[ ! -e "$safe_target/dotfiles" ] || fail 'local preview created directories through a safe symlink'
+HOME="$safe_home" /bin/sh "$boundary_repo/maintain.sh" local > "$root/safe.out" ||
+    fail 'local rejected a safe ancestor symlink'
+for entry in shell.sh nvim.lua ghostty.conf; do
+    [ -f "$safe_target/dotfiles/local/$entry" ] || fail "local did not create $entry through a safe symlink"
+done
+
+# Parent traversal must be refused before lexical normalization hides a symlink.
+traversal_home="$root/missing/../config-link-home"
+for preview in preview real; do
+    set --
+    [ "$preview" != preview ] || set -- --dry-run
+    if HOME="$traversal_home" /bin/sh "$boundary_repo/maintain.sh" local "$@" > "$root/local-traversal.out" 2>&1; then
+        fail "local accepted HOME parent traversal ($preview)"
+    fi
+    grep -q 'parent traversal' "$root/local-traversal.out" || fail 'local did not explain the traversal refusal'
+done
+[ ! -e "$root/missing" ] || fail 'local created an ancestor before rejecting traversal'
+
+# Invalid HOME and unusable ancestors fail clearly without creating anything.
+newline='
+'
+carriage_return=$(printf '\r')
+for invalid in relative dangling blocked newline carriage physical-newline physical-trailing-newline physical-carriage; do
+    invalid_home="$root/invalid-$invalid"
+    case "$invalid" in
+        relative) invalid_home=relative-home; expected='must be an absolute path' ;;
+        dangling)
+            mkdir -p "$invalid_home"
+            ln -s "$root/nonexistent-target" "$invalid_home/.config"
+            expected='is not a directory' ;;
+        blocked)
+            mkdir -p "$invalid_home"
+            printf 'keep this file\n' > "$invalid_home/.config"
+            expected='is not a directory' ;;
+        newline) invalid_home="$root/invalid${newline}home"; expected='newline and carriage-return' ;;
+        carriage) invalid_home="$root/invalid${carriage_return}home"; expected='newline and carriage-return' ;;
+        physical-*)
+            case "$invalid" in
+                physical-newline) invalid_target="$root/target${newline}suffix" ;;
+                physical-trailing-newline) invalid_target="$root/target$newline" ;;
+                physical-carriage) invalid_target="$root/target${carriage_return}suffix" ;;
+            esac
+            mkdir -p "$invalid_home" "$invalid_target"
+            ln -s "$invalid_target" "$invalid_home/.config"
+            expected='newline and carriage-return' ;;
+    esac
+    for preview in preview real; do
+        set --
+        [ "$preview" != preview ] || set -- --dry-run
+        if HOME="$invalid_home" /bin/sh "$boundary_repo/maintain.sh" local "$@" > "$root/invalid-path.out" 2>&1; then
+            fail "local accepted an invalid $invalid path ($preview)"
+        fi
+        grep -q "$expected" "$root/invalid-path.out" ||
+            fail "local did not explain the invalid $invalid path: $(cat "$root/invalid-path.out")"
+    done
+    case "$invalid" in
+        newline|carriage) [ ! -e "$invalid_home" ] || fail 'local created an invalid HOME' ;;
+        physical-*) [ ! -e "$invalid_target/dotfiles" ] || fail 'local wrote through an invalid physical ancestor' ;;
+    esac
+done
+[ ! -e "$root/nonexistent-target" ] || fail 'local created a dangling symlink destination'
+[ "$(cat "$root/invalid-blocked/.config")" = 'keep this file' ] || fail 'local modified a blocking ancestor'
+
+# A newline in the physical checkout path must survive pwd capture until refusal,
+# even when the invocation path itself has no newline (an ancestor symlink).
+newline_repo="$root/repo$newline"
+mkdir -p "$newline_repo"
+cp "$repo/maintain.sh" "$newline_repo/maintain.sh"
+ln -s "$newline_repo" "$root/repo-alias"
+for script in "$newline_repo/maintain.sh" "$root/repo-alias/maintain.sh"; do
+    if HOME="$root/script-home" /bin/sh "$script" local > "$root/repo-path.out" 2>&1; then
+        fail 'local accepted a newline-containing repository path'
+    fi
+    grep -q 'newline and carriage-return' "$root/repo-path.out" ||
+        fail 'local did not explain the invalid repository path'
+done
+[ ! -e "$root/script-home" ] || fail 'local wrote before validating the repository path'
+
 # local never reads maintenance state, so it must work with an unusable state path.
 relstate_home="$root/relstate"
 mkdir -p "$relstate_home"
