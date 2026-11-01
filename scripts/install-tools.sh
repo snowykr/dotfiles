@@ -90,6 +90,53 @@ elif [ "$os" = Linux ]; then
     exit 1
 fi
 
+# Even previews compile/link privately: no binary execution or persistent changes.
+probe_c_toolchain() (
+    compiler=
+    for candidate in cc gcc clang; do
+        if compiler_path=$(command -v "$candidate" 2>/dev/null); then
+            compiler=$candidate
+            case "$compiler_path" in
+                /*) ;;
+                *) compiler_path="$PWD/$compiler_path" ;;
+            esac
+            break
+        fi
+    done
+    if [ -z "$compiler" ]; then
+        printf 'Missing required editor setup prerequisite: a C compiler (cc, gcc, or clang). Install one manually before running the editor setup.\n' >&2
+        exit 1
+    fi
+
+    probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-compiler.XXXXXXXX") || exit $?
+    case "$probe_dir" in
+        /*) ;;
+        *) probe_dir="$PWD/$probe_dir" ;;
+    esac
+    trap 'rm -rf "$probe_dir"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    CDPATH='' cd -- "$probe_dir" || exit $?
+    printf '%s\n' '#include <stdint.h>
+#include <stdlib.h>
+int main(void) {
+    uint_least8_t *value = malloc(sizeof *value);
+    if (value == NULL) return EXIT_FAILURE;
+    *value = 0;
+    free(value);
+    return EXIT_SUCCESS;
+}' > "$probe_dir/probe.c" || exit $?
+    if ! "$compiler_path" "$probe_dir/probe.c" -o "$probe_dir/probe"; then
+        printf 'The C toolchain (%s) could not compile and link a program using stdint.h and stdlib.h. Install a working C compiler, C standard library development headers and linker manually before running the editor setup; see the compiler diagnostic above.\n' "$compiler" >&2
+        exit 1
+    fi
+    if [ ! -f "$probe_dir/probe" ] || [ ! -s "$probe_dir/probe" ]; then
+        printf 'The C toolchain (%s) did not produce a nonempty program file. Install a working C compiler, C standard library development headers and linker manually before running the editor setup.\n' "$compiler" >&2
+        exit 1
+    fi
+)
+
 preflight_toolchain() {
     preflight_ok=1
     if ! command -v node >/dev/null 2>&1; then
@@ -129,8 +176,7 @@ preflight_toolchain() {
             preflight_ok=0
         fi
     fi
-    if ! command -v cc >/dev/null 2>&1 && ! command -v gcc >/dev/null 2>&1 && ! command -v clang >/dev/null 2>&1; then
-        printf 'Missing required editor setup prerequisite: a C compiler (cc, gcc, or clang). Install one manually before running the editor setup.\n' >&2
+    if ! probe_c_toolchain; then
         preflight_ok=0
     fi
     [ "$preflight_ok" -eq 1 ]
