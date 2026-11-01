@@ -1,7 +1,23 @@
 #!/bin/sh
 set -eu
 
-repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+validate_path_characters() {
+    carriage_return=$(printf '\r')
+    case "$1" in
+        *'
+'*|*"$carriage_return"*)
+            printf '%s: newline and carriage-return paths are not supported\n' "$2" >&2
+            return 2 ;;
+    esac
+}
+
+validate_path_characters "$0" 'Repository script path' || exit 2
+# The sentinel preserves pathname newlines until validation; strip only pwd's
+# output delimiter, not any trailing newlines belonging to the directory name.
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P && printf '.') || exit 2
+repo=${repo%.}
+repo=${repo%?}
+validate_path_characters "$repo" 'Repository path' || exit 2
 state_dir=
 
 # Checked before any expansion below so an unset HOME reports itself instead of
@@ -29,7 +45,50 @@ for option in "$@"; do
     esac
 done
 
-# local writes only under $HOME, so state-path validation does not apply to it.
+# Resolve existing ancestors physically without creating missing directories.
+# Both maintenance state and local overrides must stay outside the checkout.
+resolve_directory_path() (
+    path=$1
+    label=$2
+    validate_path_characters "$path" "$label" || return 2
+    case "$path" in
+        /*) ;;
+        *) printf '%s must be an absolute path\n' "$label" >&2; return 2 ;;
+    esac
+    # Normalize only after rejecting traversal, which could conceal a symlink.
+    case "$path" in
+        */../*|*/..) printf '%s must not contain parent traversal\n' "$label" >&2; return 2 ;;
+    esac
+    parent=$path
+    suffix=
+    while [ ! -d "$parent" ]; do
+        if [ -e "$parent" ] || [ -L "$parent" ]; then
+            printf '%s is not a directory: %s\n' "$label" "$parent" >&2
+            return 2
+        fi
+        suffix="/${parent##*/}$suffix"
+        parent=${parent%/*}
+        [ -n "$parent" ] || parent=/
+    done
+    parent=$(CDPATH='' cd -- "$parent" && pwd -P && printf '.') || return 2
+    parent=${parent%.}
+    parent=${parent%?}
+    validate_path_characters "$parent" "$label" || return 2
+    printf '%s\n' "$parent$suffix" | awk '
+        {
+            count = split($0, part, "/"); depth = 0
+            for (i = 1; i <= count; i++) {
+                if (part[i] == "" || part[i] == ".") continue
+                stack[++depth] = part[i]
+            }
+            for (i = 1; i <= depth; i++) printf "/%s", stack[i]
+            if (depth == 0) printf "/"
+            printf "\n"
+        }
+    '
+)
+
+# local never reads maintenance state; it validates its own destination instead.
 if [ "$action" != local ]; then
     state_base=${XDG_STATE_HOME:-"$HOME/.local/state"}
     state_dir="$state_base/dotfiles"
@@ -37,38 +96,7 @@ if [ "$action" != local ]; then
         /*) ;;
         *) printf 'XDG_STATE_HOME must be an absolute path\n' >&2; exit 2 ;;
     esac
-    # Reject parent traversal before resolving missing ancestors: lexical normalization
-    # could otherwise expose a symlink that has not been physically resolved.
-    case "$state_dir" in
-        */../*|*/..) printf 'Maintenance state path must not contain parent traversal\n' >&2; exit 2 ;;
-    esac
-    # Resolve existing parent symlinks without creating anything, including on previews.
-    # This also catches /var vs /private/var and symlinked XDG paths into the checkout.
-    state_parent=$state_dir
-    state_suffix=
-    while [ ! -d "$state_parent" ]; do
-        if [ -e "$state_parent" ] || [ -L "$state_parent" ]; then
-            printf 'Maintenance state path is not a directory: %s\n' "$state_parent" >&2
-            exit 2
-        fi
-        state_suffix="/${state_parent##*/}$state_suffix"
-        state_parent=${state_parent%/*}
-        [ -n "$state_parent" ] || state_parent=/
-    done
-    state_parent=$(CDPATH= cd -- "$state_parent" && pwd -P)
-    state_dir=$(printf '%s\n' "$state_parent$state_suffix" | awk '
-        {
-            count = split($0, part, "/"); depth = 0
-            for (i = 1; i <= count; i++) {
-                if (part[i] == "" || part[i] == ".") continue
-                if (part[i] == "..") { if (depth > 0) depth--; continue }
-                stack[++depth] = part[i]
-            }
-            for (i = 1; i <= depth; i++) printf "/%s", stack[i]
-            if (depth == 0) printf "/"
-            printf "\n"
-        }
-    ')
+    state_dir=$(resolve_directory_path "$state_dir" 'Maintenance state path') || exit 2
     case "$state_dir" in
         "$repo"|"$repo"/*) printf 'Maintenance state must be outside the repository\n' >&2; exit 2 ;;
     esac
@@ -607,6 +635,12 @@ local_overrides() {
         printf 'Refused: %s exists and is not a directory\n' "$local_dir" >&2
         return 1
     fi
+    local_dir=$(resolve_directory_path "$local_dir" 'Local override path') || return 1
+    case "$local_dir" in
+        "$repo"|"$repo"/*)
+            printf 'Refused: local overrides must be outside the repository: %s\n' "$local_dir" >&2
+            return 1 ;;
+    esac
     if [ "$dry_run" -eq 1 ]; then
         for entry in shell.sh nvim.lua ghostty.conf; do
             if [ -e "$local_dir/$entry" ] || [ -L "$local_dir/$entry" ]; then
