@@ -4,9 +4,9 @@ unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS
 unset DOTFILES_LOCAL_MARKER
 GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_NOSYSTEM
-repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 root=$(mktemp -d)
-root=$(CDPATH= cd -- "$root" && pwd -P)
+root=$(CDPATH='' cd -- "$root" && pwd -P)
 trap 'rm -rf "$root"' EXIT HUP INT TERM
 
 fail() {
@@ -15,9 +15,9 @@ fail() {
 }
 
 # Each hook must be the last thing its managed configuration does, so an override wins.
-shell_hook='if [ -f "$HOME/.config/dotfiles/local/shell.sh" ]; then
-    . "$HOME/.config/dotfiles/local/shell.sh"
-fi'
+shell_hook="if [ -f \"\$HOME/.config/dotfiles/local/shell.sh\" ]; then
+    . \"\$HOME/.config/dotfiles/local/shell.sh\"
+fi"
 [ "$(tail -n 3 "$repo/shell/zshrc")" = "$shell_hook" ] || fail 'shell/zshrc must end with the local override hook'
 [ "$(tail -n 3 "$repo/shell/bashrc")" = "$shell_hook" ] || fail 'shell/bashrc must end with the local override hook'
 [ "$(tail -n 1 "$repo/config/nvim/init.lua")" = 'require("config.local")' ] || fail 'config/nvim/init.lua must end by loading the local override module'
@@ -42,12 +42,12 @@ check_shell() {
     fi
     # A distro login banner may precede the marker, so only the final line is ours.
     printf 'DOTFILES_LOCAL_MARKER=from-local\n' > "$home/.config/dotfiles/local/shell.sh"
-    output=$(HOME="$home" "$shell" -i -c 'printf "%s\\n" "${DOTFILES_LOCAL_MARKER:-missing}"' 2>/dev/null) ||
+    output=$(HOME="$home" "$shell" -i -c "printf '%s\n' \"\${DOTFILES_LOCAL_MARKER:-missing}\"" 2>/dev/null) ||
         fail "$shell failed to load the dotfiles configuration"
     marker=$(printf '%s\n' "$output" | tail -n 1)
     [ "$marker" = 'from-local' ] || fail "$shell did not load the local override (got: $output)"
     rm "$home/.config/dotfiles/local/shell.sh"
-    output=$(HOME="$home" "$shell" -i -c 'printf "%s\\n" "${DOTFILES_LOCAL_MARKER:-missing}"' 2>/dev/null) ||
+    output=$(HOME="$home" "$shell" -i -c "printf '%s\n' \"\${DOTFILES_LOCAL_MARKER:-missing}\"" 2>/dev/null) ||
         fail "$shell failed when the local override was absent"
     marker=$(printf '%s\n' "$output" | tail -n 1)
     [ "$marker" = 'missing' ] || fail "$shell did not tolerate a missing local override (got: $output)"

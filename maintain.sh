@@ -488,7 +488,7 @@ update() {
 # Neither switch --discard-changes nor reset --hard is safe around such paths.
 recovery_preflight() {
     [ "$(git_repo rev-parse --show-toplevel)" = "$repo" ] || return 1
-    git_repo rev-parse --verify refs/heads/main^{commit} >/dev/null || return 1
+    git_repo rev-parse --verify 'refs/heads/main^{commit}' >/dev/null || return 1
     git_repo remote get-url origin >/dev/null || return 1
     for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
         operation_path=$(git_repo rev-parse --git-path "$operation") || return 1
@@ -518,7 +518,7 @@ recover() {
     git_repo remote get-url origin || return 1
     recovery_guidance || return 1
     printf 'Local main commits absent from cached origin/main (fetch may change this list):\n'
-    if git_repo rev-parse --verify refs/remotes/origin/main^{commit} >/dev/null 2>&1; then
+    if git_repo rev-parse --verify 'refs/remotes/origin/main^{commit}' >/dev/null 2>&1; then
         git_repo log --oneline refs/remotes/origin/main..refs/heads/main || return 1
     else
         printf 'No cached origin/main; exact losses will be listed after fetching.\n'
@@ -544,7 +544,7 @@ recover() {
     before=$(git_repo rev-parse refs/heads/main)
     recovery_origin=$(git_repo remote get-url origin)
     fetch_remote || return 1
-    remote=$(git_repo rev-parse --verify refs/remotes/origin/main^{commit}) || return 1
+    remote=$(git_repo rev-parse --verify 'refs/remotes/origin/main^{commit}') || return 1
     recovery_preflight || return 1
     if [ "$(git_repo remote get-url origin)" != "$recovery_origin" ] ||
        [ "$(git_repo rev-parse HEAD)" != "$recovery_head" ] ||
