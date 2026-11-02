@@ -117,9 +117,9 @@ fi
 
 if [ "$with_brew" -eq 1 ]; then
     if [ "$dry_run" -eq 1 ]; then
-        printf 'Would run: brew bundle --file %s/Brewfile\n' "$repo"
+        printf 'Would run: HOMEBREW_NO_ASK=1 brew bundle --file %s/Brewfile\n' "$repo"
     else
-        brew bundle --file "$repo/Brewfile"
+        HOMEBREW_NO_ASK=1 brew bundle --file "$repo/Brewfile"
     fi
 fi
 if [ "$with_macos" -eq 1 ]; then

@@ -231,8 +231,8 @@ if [ -n "$packages" ]; then
                 exit 1
             }
             for package in "$@"; do
-                printf 'Install: brew install %s\n' "$package"
-                [ "$dry_run" -eq 1 ] || brew install "$package"
+                printf 'Install: HOMEBREW_NO_ASK=1 brew install %s\n' "$package"
+                [ "$dry_run" -eq 1 ] || HOMEBREW_NO_ASK=1 brew install "$package"
             done ;;
         Linux)
             command -v apt-get >/dev/null 2>&1 || {
@@ -303,10 +303,10 @@ install_tacit() (
     trap 'exit 130' INT
     trap 'exit 143' TERM
     curl -fsSL https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh -o "$installer_dir/install.sh" || exit $?
-    /bin/sh "$installer_dir/install.sh"
+    /bin/sh "$installer_dir/install.sh" --edition enkoja --languages ja,en,ko </dev/null
 )
 
 if [ "$os" = Darwin ]; then
-    printf 'Install/update: latest Tacit via official release installer\n'
+    printf 'Install/update: latest Tacit via official release installer --edition enkoja --languages ja,en,ko (Japanese, English, Korean; no language-selection prompt)\n'
     [ "$dry_run" -eq 1 ] || install_tacit
 fi
