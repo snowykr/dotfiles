@@ -159,12 +159,20 @@ vim.schedule_wrap = original_schedule_wrap
 local refresh_callback
 local registry_ready = false
 local refresh_count = 0
+local function mason_package(installable)
+    return {
+        is_installable = function()
+            assert(registry_ready, "Mason installability was checked before the registry callback")
+            return installable
+        end,
+    }
+end
 local packages = {
-    ["lua-language-server"] = { spec = { source = { supported_platforms = { "darwin_arm64" } } } },
-    ["typescript-language-server"] = { spec = { source = {} } },
-    gopls = { spec = { source = { supported_platforms = { "linux_x64" } } } },
-    pyright = { spec = { source = { supported_platforms = { "linux_x64" } } } },
-    clangd = { spec = { source = { supported_platforms = {} } } },
+    ["lua-language-server"] = mason_package(true),
+    ["typescript-language-server"] = mason_package(true),
+    gopls = mason_package(false),
+    pyright = mason_package(false),
+    clangd = mason_package(true),
 }
 local registry = {
     refresh = function(callback)
@@ -183,18 +191,6 @@ local registry = {
 }
 package.preload["mason-registry"] = function()
     return registry
-end
-
-local platform = {
-    is = setmetatable({ darwin_arm64 = true }, {
-        __index = function()
-            return false
-        end,
-    }),
-}
-package.preload["mason-core.platform"] = function()
-    assert(registry_ready, "Mason platform filtering happened before the registry callback")
-    return platform
 end
 
 local mapping_reads = 0
@@ -298,6 +294,21 @@ for _, server in ipairs({ "gopls", "rust_analyzer", "pyright" }) do
     assert(not vim.list_contains(installed_server_options.automatic_enable, server), "Offline activation excludes unsupported or missing package: " .. server)
 end
 
+-- Real clangd metadata restricts asset targets without supported_platforms.
+-- Mason's installer compiler, not a guessed metadata field, decides availability.
+packages.clangd = mason_package(false)
+packages.clangd.spec = { source = { asset = { { target = "linux_x64_gnu" } } } }
+registry_ready = false
+configured_servers = {}
+notifications = {}
+mason_lsp_plugin.config()
+registry_ready = true
+refresh_callback(true, {})
+equal_array(installed_server_options.ensure_installed, { "lua_ls", "ts_ls" }, "Unsupported asset target is not installed")
+equal_array(installed_server_options.automatic_enable, { "lua_ls", "ts_ls" }, "Unsupported asset target is not activated")
+equal(configured_servers.clangd, nil, "Non-installable clangd is not configured")
+assert(notifications[1].message:find("clangd", 1, true), "Unavailable asset is reported")
+
 -- A cold, failed refresh has no usable packages and must not fail open.
 registry_ready = false
 packages = {}
@@ -321,4 +332,67 @@ assert(refresh_failure_reported, "Failed registry refresh reports a warning")
 vim.lsp.config = original_lsp_config
 vim.lsp.enable = original_lsp_enable
 vim.notify = original_notify
+
+-- Clone failures must exit headless jobs, while an attached UI may acknowledge
+-- the diagnostic before exiting. No network requests or process exits occur here.
+local function check_bootstrap_failure(uis, expected_reads)
+    local saved_stat = vim.uv.fs_stat
+    local saved_system = vim.fn.system
+    local saved_echo = vim.api.nvim_echo
+    local saved_uis = vim.api.nvim_list_uis
+    local saved_getchar = vim.fn.getchar
+    local saved_exit = os.exit
+    local reads = 0
+    local exit_code
+    local echoed
+    local stopped = {}
+
+    vim.uv.fs_stat = function()
+        return nil
+    end
+    vim.fn.system = function(command)
+        equal_array(command, {
+            "git", "clone", "--filter=blob:none", "--branch=stable",
+            "https://github.com/folke/lazy.nvim.git",
+            vim.fn.stdpath("data") .. "/lazy/lazy.nvim",
+        }, "Bootstrap clone command")
+        saved_system({ "sh", "-c", "exit 1" })
+        return "deliberate clone failure"
+    end
+    vim.api.nvim_echo = function(chunks)
+        echoed = ""
+        for _, chunk in ipairs(chunks) do
+            echoed = echoed .. chunk[1]
+        end
+    end
+    vim.api.nvim_list_uis = function()
+        return uis
+    end
+    vim.fn.getchar = function()
+        reads = reads + 1
+        return 0
+    end
+    os.exit = function(code)
+        exit_code = code
+        error(stopped, 0)
+    end
+
+    local ok, err = pcall(dofile, repo .. "/config/nvim/lua/config/lazy.lua")
+    vim.uv.fs_stat = saved_stat
+    vim.fn.system = saved_system
+    vim.api.nvim_echo = saved_echo
+    vim.api.nvim_list_uis = saved_uis
+    vim.fn.getchar = saved_getchar
+    os.exit = saved_exit
+
+    equal(ok, false, "Failed bootstrap exits instead of loading plugins")
+    equal(err, stopped, "Failed bootstrap reaches the deliberate exit")
+    equal(exit_code, 1, "Failed bootstrap reports a failing exit status")
+    equal(reads, expected_reads, "Only an attached UI waits for acknowledgement")
+    assert(echoed:find("deliberate clone failure", 1, true), "Bootstrap retains clone diagnostics")
+    equal(echoed:find("Press any key", 1, true) ~= nil, expected_reads > 0, "Only an attached UI prompts")
+end
+
+check_bootstrap_failure({}, 0)
+check_bootstrap_failure({ { chan = 1 } }, 1)
 print("Offline Neovim configuration tests passed.")

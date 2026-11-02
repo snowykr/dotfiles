@@ -4,7 +4,7 @@ repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT HUP INT TERM
 mkdir -p "$root/bin" "$root/home"
-for tool in mktemp rm mkdir sh cp chmod; do
+for tool in mktemp rm mkdir sh cp chmod dirname; do
     ln -s "$(command -v "$tool")" "$root/bin/$tool"
 done
 
@@ -14,9 +14,40 @@ printf '#!/bin/sh\nexit 0\n' > "$root/tool"
 chmod +x "$root/tool"
 printf '#!/bin/sh\nprintf "tree-sitter %%s\\n" "$MOCK_TREE_SITTER_VERSION"\n' > "$root/bin/tree-sitter"
 printf '#!/bin/sh\nprintf "v%%s\\n" "$MOCK_NODE_VERSION"\n' > "$root/bin/node"
-for tool in npm go cc tar unzip gzip; do
+for tool in npm go tar unzip gzip; do
     cp "$root/tool" "$root/bin/$tool"
 done
+cat > "$root/compiler" <<'COMPILER'
+#!/bin/sh
+set -eu
+[ "$#" -eq 3 ] && [ "$2" = -o ]
+source_file=$1
+output_file=$3
+[ -f "$source_file" ]
+stdint=0
+stdlib=0
+while IFS= read -r line; do
+    case "$line" in
+        "#include <stdint.h>") stdint=1 ;;
+        "#include <stdlib.h>") stdlib=1 ;;
+    esac
+done < "$source_file"
+[ "$stdint$stdlib" = 11 ]
+printf "%s\n" "${0##*/}" > "$COMPILER_LOG"
+printf "%s\n" "$source_file" "$output_file" > "$COMPILER_PATH_LOG"
+# Create partial output on failure so cleanup covers linker/compiler leftovers.
+printf "#!/bin/sh\nprintf executed >> \"\$COMPILER_EXEC_LOG\"\nexit 99\n" > "$output_file"
+case "${MOCK_COMPILER_FAILURE:-}" in
+    headers) printf "fatal error: stdint.h: No such file or directory\n" >&2; exit 1 ;;
+    linker) printf "ld: cannot find Scrt1.o\n" >&2; exit 1 ;;
+    no-output) rm "$output_file"; exit 0 ;;
+    empty-output) : > "$output_file"; exit 0 ;;
+    noexec-output) chmod 0644 "$output_file"; exit 0 ;;
+esac
+chmod +x "$output_file"
+COMPILER
+chmod +x "$root/compiler"
+cp "$root/compiler" "$root/bin/cc"
 printf '#!/bin/sh\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    neovim) cp "$MOCK_NVIM" "$MOCK_BIN/nvim";;\n    ripgrep) tool=rg;;\n    *) tool=$2;;\nesac\n[ "$2" = neovim ] || cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\n' > "$root/bin/brew"
 printf '#!/bin/sh\nprintf "sudo %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    update) : > "$APT_UPDATE_MARKER"; exit 0;;\n    install) ;;\n    *) exit 0;;\nesac\nshift 3\nfor package in "$@"; do\n    case "$package" in\n        ripgrep) tool=rg;; fd-find) tool=fdfind;;\n        curl) cp "$MOCK_CURL" "$MOCK_BIN/curl"; continue;;\n        *) tool=$package;;\n    esac\n    cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\ndone\n' > "$root/bin/sudo"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$APT_CACHE_LOG"\n[ -e "$APT_UPDATE_MARKER" ] || exit 1\nif [ "$2" = "$MOCK_NO_CANDIDATE" ]; then\n    exit 0\nelse\n    printf "Candidate: 1.0\\n"\nfi\n' > "$root/bin/apt-cache"
@@ -68,6 +99,10 @@ MOCK_TACIT_INSTALLER="$root/tacit-installer"
 TACIT_DOWNLOAD_LOG="$root/tacit-download-log"
 TACIT_EXEC_LOG="$root/tacit-exec-log"
 TACIT_PATH_LOG="$root/tacit-path-log"
+COMPILER_LOG="$root/compiler-log"
+COMPILER_PATH_LOG="$root/compiler-path-log"
+COMPILER_EXEC_LOG="$root/compiler-exec-log"
+export COMPILER_LOG COMPILER_PATH_LOG COMPILER_EXEC_LOG
 mkdir -p "$root/tmp"
 TMPDIR="$root/tmp"
 export TMPDIR MOCK_TACIT_INSTALLER TACIT_DOWNLOAD_LOG TACIT_EXEC_LOG TACIT_PATH_LOG
@@ -84,6 +119,108 @@ HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > 
 set -- "$root/tmp"/*
 [ ! -e "$1" ]
 case "$(cat "$root/preview")" in *'latest Tacit'*) ;; *) exit 1 ;; esac
+[ "$(cat "$COMPILER_LOG")" = cc ]
+[ ! -e "$COMPILER_EXEC_LOG" ]
+while IFS= read -r compiler_path; do
+    case "$compiler_path" in "$TMPDIR"/dotfiles-compiler.*/*) ;; *) exit 1 ;; esac
+    [ ! -e "$compiler_path" ]
+    [ ! -e "${compiler_path%/*}" ]
+done < "$COMPILER_PATH_LOG"
+
+# A relative TMPDIR must keep source/output paths and cleanup valid after cd.
+for compiler_result in success headers; do
+    (
+        CDPATH='' cd -- "$root"
+        compiler_failure=
+        [ "$compiler_result" != headers ] || compiler_failure=headers
+        status=0
+        TMPDIR=tmp MOCK_COMPILER_FAILURE="$compiler_failure" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/relative-preview" 2> "$root/error" || status=$?
+        if [ "$compiler_result" = success ]; then
+            [ "$status" -eq 0 ]
+        else
+            [ "$status" -eq 1 ]
+            case "$(cat "$root/error")" in *'fatal error: stdint.h: No such file or directory'*) ;; *) exit 1 ;; esac
+        fi
+        while IFS= read -r compiler_path; do
+            case "$compiler_path" in "$root"/tmp/dotfiles-compiler.*/*) ;; *) exit 1 ;; esac
+            [ ! -e "$compiler_path" ]
+            [ ! -e "${compiler_path%/*}" ]
+        done < "$COMPILER_PATH_LOG"
+        set -- tmp/*
+        [ ! -e "$1" ]
+    )
+done
+
+# The linked artifact is never executed; noexec access must not reject it.
+MOCK_COMPILER_FAILURE=noexec-output HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/nonexec-preview"
+[ ! -e "$COMPILER_EXEC_LOG" ]
+while IFS= read -r compiler_path; do
+    [ ! -e "$compiler_path" ]
+    [ ! -e "${compiler_path%/*}" ]
+done < "$COMPILER_PATH_LOG"
+
+# Use the first available compiler, never silently bypass a broken one.
+cp "$root/compiler" "$root/bin/gcc"
+cp "$root/compiler" "$root/bin/clang"
+HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/compiler-preview"
+[ "$(cat "$COMPILER_LOG")" = cc ]
+rm "$root/bin/cc"
+HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/compiler-preview"
+[ "$(cat "$COMPILER_LOG")" = gcc ]
+rm "$root/bin/gcc"
+HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/compiler-preview"
+[ "$(cat "$COMPILER_LOG")" = clang ]
+rm "$root/bin/clang"
+if HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/compiler-preview" 2> "$root/error"; then
+    printf 'Missing C compiler should fail preflight\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'a C compiler (cc, gcc, or clang)'*) ;; *) exit 1 ;; esac
+cp "$root/compiler" "$root/bin/cc"
+cp "$root/compiler" "$root/bin/gcc"
+
+# Both real initialization and previews reject headers/linker failures before
+# packages, network requests, Git configuration, backups or config links.
+mkdir -p "$root/compiler-home/.config/nvim"
+printf 'keep shell\n' > "$root/compiler-home/.zshrc"
+printf 'keep editor\n' > "$root/compiler-home/.config/nvim/local.txt"
+printf '[user]\n    name = Keep User\n' > "$root/compiler-home/.gitconfig"
+for compiler_failure in headers linker no-output empty-output; do
+    for compiler_mode in install dry-run; do
+        set --
+        [ "$compiler_mode" = install ] || set -- --dry-run
+        if MOCK_COMPILER_FAILURE="$compiler_failure" TEST_LOG="$root/broken-compiler-log" HOME="$root/compiler-home" XDG_CONFIG_HOME="$root/compiler-home/.config" PATH="$root/bin" "$repo/initialize.sh" --no-macos "$@" > "$root/compiler-preview" 2> "$root/error"; then
+            printf 'Broken C toolchain should reject initialization (%s, %s)\n' "$compiler_failure" "$compiler_mode" >&2
+            exit 1
+        fi
+        case "$(cat "$root/error")" in *'C standard library development headers and linker manually'*) ;; *) exit 1 ;; esac
+        case "$compiler_failure" in
+            headers) case "$(cat "$root/error")" in *'fatal error: stdint.h: No such file or directory'*) ;; *) exit 1 ;; esac ;;
+            linker) case "$(cat "$root/error")" in *'ld: cannot find Scrt1.o'*) ;; *) exit 1 ;; esac ;;
+            no-output|empty-output) case "$(cat "$root/error")" in *'did not produce a nonempty program file'*) ;; *) exit 1 ;; esac ;;
+        esac
+        [ "$(cat "$COMPILER_LOG")" = cc ]
+        [ ! -e "$root/broken-compiler-log" ]
+        [ ! -e "$TACIT_DOWNLOAD_LOG" ]
+        [ ! -e "$TACIT_EXEC_LOG" ]
+        [ ! -e "$COMPILER_EXEC_LOG" ]
+        [ ! -e "$root/compiler-home/.dotfiles-backups" ]
+        [ ! -e "$root/compiler-home/.local" ]
+        [ ! -L "$root/compiler-home/.zshrc" ]
+        [ ! -L "$root/compiler-home/.config/nvim" ]
+        [ "$(cat "$root/compiler-home/.zshrc")" = 'keep shell' ]
+        [ "$(cat "$root/compiler-home/.config/nvim/local.txt")" = 'keep editor' ]
+        [ "$(cat "$root/compiler-home/.gitconfig")" = '[user]
+    name = Keep User' ]
+        while IFS= read -r compiler_path; do
+            [ ! -e "$compiler_path" ]
+            [ ! -e "${compiler_path%/*}" ]
+        done < "$COMPILER_PATH_LOG"
+        set -- "$root/tmp"/*
+        [ ! -e "$1" ]
+    done
+done
+rm "$root/bin/gcc"
 MOCK_NODE_VERSION=22.22.1
 export MOCK_NODE_VERSION
 if TEST_LOG="$root/old-node-log" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
@@ -235,6 +372,45 @@ fi
 case "$(cat "$root/error")" in *'Missing required editor setup prerequisite: unzip'*) ;; *) exit 1 ;; esac
 [ ! -e "$root/missing-archive-tool-log" ]
 cp "$root/tool" "$root/bin/unzip"
+
+# Respect the CLI selected by the caller, including npm's 0.27.1 executable.
+# Adding ~/.local/bin must not promote an older CLI over the caller's PATH.
+MOCK_TREE_SITTER_VERSION=0.27.1
+export MOCK_TREE_SITTER_VERSION
+printf '#!/bin/sh\nprintf "tree-sitter 0.25.0\\n"\n' > "$root/home/.local/bin/tree-sitter"
+chmod +x "$root/home/.local/bin/tree-sitter"
+for selected_path in "$root/bin" "$root/bin:$root/home/.local/bin"; do
+    TEST_LOG="$root/npm-cli-log" HOME="$root/home" PATH="$selected_path" "$repo/scripts/install-tools.sh" --dry-run > "$root/npm-cli-preview"
+    [ ! -e "$root/npm-cli-log" ]
+done
+# An explicitly selected old binary must fail with its actual path and version.
+if HOME="$root/home" PATH="$root/home/.local/bin:$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
+    printf 'An explicitly selected old CLI should not be bypassed\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *"$root/home/.local/bin/tree-sitter"*'tree-sitter 0.25.0'*) ;; *) exit 1 ;; esac
+rm "$root/home/.local/bin/tree-sitter"
+
+# Missing, unexecutable and unsupported CLI versions are different failures.
+cp "$root/bin/tree-sitter" "$root/tree-sitter-tool"
+rm "$root/bin/tree-sitter"
+if HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
+    printf 'Missing tree-sitter executable should fail preflight\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'Missing required editor setup prerequisite: tree-sitter-cli'*'PATH'*'npm prefix -g'*) ;; *) exit 1 ;; esac
+cat > "$root/bin/tree-sitter" <<'BROKEN_CLI'
+#!/bin/sh
+printf 'error while loading shared libraries: libexample.so\n' >&2
+exit 127
+BROKEN_CLI
+chmod +x "$root/bin/tree-sitter"
+if HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
+    printf 'An installed but broken CLI should fail preflight\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'libexample.so'*"$root/bin/tree-sitter"*'exit 127'*) ;; *) exit 1 ;; esac
+cp "$root/tree-sitter-tool" "$root/bin/tree-sitter"
 
 MOCK_TREE_SITTER_VERSION=0.26.0
 export MOCK_TREE_SITTER_VERSION

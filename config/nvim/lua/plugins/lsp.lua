@@ -7,24 +7,8 @@ local desired_servers = {
     "clangd",
 }
 
-local function supports_current_platform(package, platform)
-    local supported_platforms = vim.tbl_get(package, "spec", "source", "supported_platforms")
-    if type(supported_platforms) ~= "table" or vim.tbl_isempty(supported_platforms) then
-        return true
-    end
-
-    for _, supported_platform in ipairs(supported_platforms) do
-        if platform.is[supported_platform] then
-            return true
-        end
-    end
-
-    return false
-end
-
 local function resolve_servers_for_current_platform(registry)
     local lspconfig_to_package = require("mason-lspconfig.mappings").get_mason_map().lspconfig_to_package
-    local platform = require("mason-core.platform")
     local ensure_installed = {}
     local servers = {}
     local unavailable = {}
@@ -36,7 +20,7 @@ local function resolve_servers_for_current_platform(registry)
             package = registry.get_package(package_name)
         end
 
-        if package and supports_current_platform(package, platform) then
+        if package and package:is_installable() then
             ensure_installed[#ensure_installed + 1] = server_name
             servers[server_name] = {}
         else
