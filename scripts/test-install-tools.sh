@@ -48,7 +48,7 @@ chmod +x "$output_file"
 COMPILER
 chmod +x "$root/compiler"
 cp "$root/compiler" "$root/bin/cc"
-printf '#!/bin/sh\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    neovim) cp "$MOCK_NVIM" "$MOCK_BIN/nvim";;\n    ripgrep) tool=rg;;\n    *) tool=$2;;\nesac\n[ "$2" = neovim ] || cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\n' > "$root/bin/brew"
+printf '#!/bin/sh\n[ "${HOMEBREW_NO_ASK:-}" = 1 ] || exit 91\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    neovim) cp "$MOCK_NVIM" "$MOCK_BIN/nvim";;\n    ripgrep) tool=rg;;\n    *) tool=$2;;\nesac\n[ "$2" = neovim ] || cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\n' > "$root/bin/brew"
 printf '#!/bin/sh\nprintf "sudo %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    update) : > "$APT_UPDATE_MARKER"; exit 0;;\n    install) ;;\n    *) exit 0;;\nesac\nshift 3\nfor package in "$@"; do\n    case "$package" in\n        ripgrep) tool=rg;; fd-find) tool=fdfind;;\n        curl) cp "$MOCK_CURL" "$MOCK_BIN/curl"; continue;;\n        *) tool=$package;;\n    esac\n    cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\ndone\n' > "$root/bin/sudo"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$APT_CACHE_LOG"\n[ -e "$APT_UPDATE_MARKER" ] || exit 1\nif [ "$2" = "$MOCK_NO_CANDIDATE" ]; then\n    exit 0\nelse\n    printf "Candidate: 1.0\\n"\nfi\n' > "$root/bin/apt-cache"
 printf '#!/bin/sh\nexit 0\n' > "$root/bin/apt-get"
@@ -57,7 +57,12 @@ cat > "$root/tacit-installer" <<'INSTALLER'
 #!/bin/sh
 set -eu
 printf '%s\n' "$0" >> "$TACIT_EXEC_LOG"
-[ "$#" -eq 0 ]
+printf '%s\n' "$*" >> "$TACIT_ARGS_LOG"
+[ "$#" -eq 4 ] && [ "$1" = --edition ] && [ "$2" = enkoja ] && [ "$3" = --languages ] && [ "$4" = ja,en,ko ]
+if IFS= read -r answer; then
+    printf 'Tacit installer must run without interactive stdin\n' >&2
+    exit 92
+fi
 [ "${MOCK_TACIT_INSTALL_STATUS:-0}" -eq 0 ] || exit "$MOCK_TACIT_INSTALL_STATUS"
 mkdir -p "$HOME/Library/Input Methods/tacit.app" "$HOME/.local/bin"
 cp "$MOCK_TOOL" "$HOME/.local/bin/tacit"
@@ -99,13 +104,14 @@ MOCK_TACIT_INSTALLER="$root/tacit-installer"
 TACIT_DOWNLOAD_LOG="$root/tacit-download-log"
 TACIT_EXEC_LOG="$root/tacit-exec-log"
 TACIT_PATH_LOG="$root/tacit-path-log"
+TACIT_ARGS_LOG="$root/tacit-args-log"
 COMPILER_LOG="$root/compiler-log"
 COMPILER_PATH_LOG="$root/compiler-path-log"
 COMPILER_EXEC_LOG="$root/compiler-exec-log"
 export COMPILER_LOG COMPILER_PATH_LOG COMPILER_EXEC_LOG
 mkdir -p "$root/tmp"
 TMPDIR="$root/tmp"
-export TMPDIR MOCK_TACIT_INSTALLER TACIT_DOWNLOAD_LOG TACIT_EXEC_LOG TACIT_PATH_LOG
+export TMPDIR MOCK_TACIT_INSTALLER TACIT_DOWNLOAD_LOG TACIT_EXEC_LOG TACIT_PATH_LOG TACIT_ARGS_LOG
 export TEST_LOG APT_CACHE_LOG APT_UPDATE_MARKER MOCK_BIN MOCK_TOOL MOCK_NVIM
 export MOCK_NVIM_VERSION MOCK_NODE_VERSION MOCK_TREE_SITTER_VERSION MOCK_OS MOCK_INSTALLER MOCK_CURL MOCK_NO_CANDIDATE
 
@@ -118,7 +124,9 @@ HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > 
 [ ! -e "$root/home/Library" ]
 set -- "$root/tmp"/*
 [ ! -e "$1" ]
-case "$(cat "$root/preview")" in *'latest Tacit'*) ;; *) exit 1 ;; esac
+case "$(cat "$root/preview")" in *'HOMEBREW_NO_ASK=1 brew install'*) ;; *) exit 1 ;; esac
+case "$(cat "$root/preview")" in *'latest Tacit'*'enkoja'*'ja,en,ko'*) ;; *) exit 1 ;; esac
+[ ! -e "$TACIT_ARGS_LOG" ]
 [ "$(cat "$COMPILER_LOG")" = cc ]
 [ ! -e "$COMPILER_EXEC_LOG" ]
 while IFS= read -r compiler_path; do
@@ -238,7 +246,8 @@ fi
 [ ! -e "$root/node-prerelease-log" ]
 MOCK_NODE_VERSION=22.22.2
 export MOCK_NODE_VERSION
-HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/mac-output"
+printf 'n\n' | HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/mac-output"
+[ "$(cat "$TACIT_ARGS_LOG")" = '--edition enkoja --languages ja,en,ko' ]
 [ "$(cat "$root/log")" = 'brew install neovim
 brew install ripgrep
 brew install fd
@@ -274,8 +283,10 @@ export MOCK_NVIM_VERSION
 cp "$root/nvim-tool" "$root/bin/nvim"
 : > "$TACIT_DOWNLOAD_LOG"
 : > "$TACIT_EXEC_LOG"
+: > "$TACIT_ARGS_LOG"
 TEST_LOG="$root/mac-rerun-log" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/mac-rerun"
 [ ! -e "$root/mac-rerun-log" ]
+[ "$(cat "$TACIT_ARGS_LOG")" = '--edition enkoja --languages ja,en,ko' ]
 [ "$(cat "$TACIT_DOWNLOAD_LOG")" = 'https://github.com/iamallyouneed/tacit/releases/latest/download/install.sh' ]
 [ "$(cat "$TACIT_EXEC_LOG")" = "$(cat "$TACIT_PATH_LOG")" ]
 tacit_path=$(cat "$TACIT_PATH_LOG")

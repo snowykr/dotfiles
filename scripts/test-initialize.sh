@@ -12,7 +12,7 @@ mkdir -p "$root/mac/.config/nvim" "$root/mac/.config/ghostty" "$root/linux/.conf
 printf '#!/bin/sh\nprintf "%%s\\n" "$MOCK_OS"\n' > "$root/stubs/uname"
 printf '#!/bin/sh\nif [ "$1" = read ]; then\n    case "$2 $3" in\n        "-g AppleInterfaceStyle") if [ "${MOCK_APPLIED:-0}" = 1 ]; then echo Dark; else echo Light; fi;;\n        "-g AppleInterfaceStyleSwitchesAutomatically"|"-g AppleAccentColor"|"-g AppleHighlightColor"|"-g AppleReduceDesktopTinting")\n            [ "${MOCK_APPLIED:-0}" = 1 ] && exit 1\n            echo 1;;\n        "com.apple.menuextra.clock IsAnalog"|"com.apple.menuextra.clock ShowAMPM")\n            [ "${MOCK_CLOCK_UNSET:-0}" != 1 ] || exit 1\n            if [ "${MOCK_CLOCK_APPLIED:-${MOCK_APPLIED:-0}}" = 1 ]; then echo 0; else echo 1; fi;;\n        "com.apple.menuextra.clock Show24Hour"|"com.apple.menuextra.clock ShowSeconds")\n            [ "${MOCK_CLOCK_UNSET:-0}" != 1 ] || exit 1\n            if [ "${MOCK_CLOCK_APPLIED:-${MOCK_APPLIED:-0}}" = 1 ]; then echo 1; else echo 0; fi;;\n        "com.apple.dock autohide") echo 1;;\n        "com.apple.dock autohide-delay") echo 0;;\n        "com.apple.dock autohide-time-modifier") echo 0.5;;\n        "com.apple.dock tilesize") if [ "${MOCK_APPLIED:-0}" = 1 ]; then echo 44; else echo 20; fi;;\n        "com.apple.dock show-recents") echo 0;;\n        "com.apple.finder ShowPathbar") echo 1;;\n        "-g AppleShowAllExtensions") echo 1;;\n        *) exit 1;;\n    esac\nelse\n    printf "%%s\\n" "$*" >> "$TEST_LOG"\nfi\n' > "$root/stubs/defaults"
 printf '#!/bin/sh\nprintf "restart %%s\\n" "$*" >> "$TEST_LOG"\n' > "$root/stubs/killall"
-printf '#!/bin/sh\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\n' > "$root/stubs/brew"
+printf '#!/bin/sh\n[ "${HOMEBREW_NO_ASK:-}" = 1 ] || exit 1\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\n' > "$root/stubs/brew"
 printf '%s\n' '#!/bin/sh
 [ "$1 $2" = "-g custom" ] || exit 2
 [ "${MOCK_PMSET_FAIL:-0}" = 0 ] || exit 1
@@ -117,6 +117,7 @@ TEST_LOG="$root/opt-out-prefs" HOME="$root/override" "$repo/initialize.sh" --she
 MOCK_OS=Linux HOME="$root/linux-zsh" "$repo/initialize.sh" --shell zsh --no-packages > "$root/linux-zsh-run"
 [ "$(readlink "$root/linux-zsh/.zshrc")" = "$repo/shell/zshrc" ]
 TEST_LOG="$root/brew-preview-log" HOME="$root/apps" "$repo/initialize.sh" --homebrew --no-macos --dry-run --no-packages > "$root/apps-preview"
+grep -Fx "Would run: HOMEBREW_NO_ASK=1 brew bundle --file $repo/Brewfile" "$root/apps-preview"
 [ ! -e "$root/brew-preview-log" ]
 [ ! -e "$root/apps" ]
 mkdir -p "$root/apps"
