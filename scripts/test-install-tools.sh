@@ -373,6 +373,45 @@ case "$(cat "$root/error")" in *'Missing required editor setup prerequisite: unz
 [ ! -e "$root/missing-archive-tool-log" ]
 cp "$root/tool" "$root/bin/unzip"
 
+# Respect the CLI selected by the caller, including npm's 0.27.1 executable.
+# Adding ~/.local/bin must not promote an older CLI over the caller's PATH.
+MOCK_TREE_SITTER_VERSION=0.27.1
+export MOCK_TREE_SITTER_VERSION
+printf '#!/bin/sh\nprintf "tree-sitter 0.25.0\\n"\n' > "$root/home/.local/bin/tree-sitter"
+chmod +x "$root/home/.local/bin/tree-sitter"
+for selected_path in "$root/bin" "$root/bin:$root/home/.local/bin"; do
+    TEST_LOG="$root/npm-cli-log" HOME="$root/home" PATH="$selected_path" "$repo/scripts/install-tools.sh" --dry-run > "$root/npm-cli-preview"
+    [ ! -e "$root/npm-cli-log" ]
+done
+# An explicitly selected old binary must fail with its actual path and version.
+if HOME="$root/home" PATH="$root/home/.local/bin:$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
+    printf 'An explicitly selected old CLI should not be bypassed\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *"$root/home/.local/bin/tree-sitter"*'tree-sitter 0.25.0'*) ;; *) exit 1 ;; esac
+rm "$root/home/.local/bin/tree-sitter"
+
+# Missing, unexecutable and unsupported CLI versions are different failures.
+cp "$root/bin/tree-sitter" "$root/tree-sitter-tool"
+rm "$root/bin/tree-sitter"
+if HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
+    printf 'Missing tree-sitter executable should fail preflight\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'Missing required editor setup prerequisite: tree-sitter-cli'*'PATH'*'npm prefix -g'*) ;; *) exit 1 ;; esac
+cat > "$root/bin/tree-sitter" <<'BROKEN_CLI'
+#!/bin/sh
+printf 'error while loading shared libraries: libexample.so\n' >&2
+exit 127
+BROKEN_CLI
+chmod +x "$root/bin/tree-sitter"
+if HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/error" 2>&1; then
+    printf 'An installed but broken CLI should fail preflight\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'libexample.so'*"$root/bin/tree-sitter"*'exit 127'*) ;; *) exit 1 ;; esac
+cp "$root/tree-sitter-tool" "$root/bin/tree-sitter"
+
 MOCK_TREE_SITTER_VERSION=0.26.0
 export MOCK_TREE_SITTER_VERSION
 if TEST_LOG="$root/old-tree-sitter-log" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1; then

@@ -8,8 +8,12 @@ set -eu
 dry_run=0
 [ "$#" -eq 0 ] || dry_run=1
 
-# Include tools installed by this script even before the shell config is loaded.
-export PATH="$HOME/.local/bin:$PATH"
+# Include locally installed tools without overriding the caller's selected CLI.
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) PATH="$PATH:$HOME/.local/bin" ;;
+esac
+export PATH
 os=$(uname -s)
 case "$os" in
     Darwin|Linux) ;;
@@ -137,6 +141,29 @@ int main(void) {
     fi
 )
 
+check_tree_sitter() {
+    if ! tree_sitter_command=$(command -v tree-sitter); then
+        printf 'Missing required editor setup prerequisite: tree-sitter-cli 0.26.1 or newer. The tree-sitter executable must be on PATH.\n' >&2
+        printf '%s\n' 'For npm installations, check command -v tree-sitter, tree-sitter --version, and npm prefix -g; a project-local npm installation is not automatically on PATH.' >&2
+        return 1
+    fi
+    tree_sitter_status=0
+    tree_sitter_output=$("$tree_sitter_command" --version) || tree_sitter_status=$?
+    if [ "$tree_sitter_status" -ne 0 ]; then
+        printf 'Installed Tree-sitter CLI could not run: %s --version failed (exit %s). Fix the execution error above or select a working CLI on PATH.\n' "$tree_sitter_command" "$tree_sitter_status" >&2
+        return 1
+    fi
+    case "$tree_sitter_output" in
+        'tree-sitter '*) tree_sitter_version=${tree_sitter_output#tree-sitter } ;;
+        *) tree_sitter_version=$tree_sitter_output ;;
+    esac
+    tree_sitter_version=${tree_sitter_version%% *}
+    if ! version_at_least "$tree_sitter_version" 0.26.1; then
+        printf 'tree-sitter-cli 0.26.1 or newer is required; selected %s reported: %s\n' "$tree_sitter_command" "$tree_sitter_output" >&2
+        return 1
+    fi
+}
+
 preflight_toolchain() {
     preflight_ok=1
     if ! command -v node >/dev/null 2>&1; then
@@ -161,20 +188,8 @@ preflight_toolchain() {
             preflight_ok=0
         fi
     fi
-    if ! command -v tree-sitter >/dev/null 2>&1; then
-        printf 'Missing required editor setup prerequisite: tree-sitter-cli 0.26.1 or newer. Install it manually before running the editor setup.\n' >&2
+    if ! check_tree_sitter; then
         preflight_ok=0
-    else
-        tree_sitter_output=$(tree-sitter --version 2>/dev/null) || tree_sitter_output=
-        case "$tree_sitter_output" in
-            'tree-sitter '*) tree_sitter_version=${tree_sitter_output#tree-sitter } ;;
-            *) tree_sitter_version=$tree_sitter_output ;;
-        esac
-        tree_sitter_version=${tree_sitter_version%% *}
-        if ! version_at_least "$tree_sitter_version" 0.26.1; then
-            printf 'tree-sitter-cli 0.26.1 or newer is required; install or upgrade it manually before running the editor setup.\n' >&2
-            preflight_ok=0
-        fi
     fi
     if ! probe_c_toolchain; then
         preflight_ok=0
