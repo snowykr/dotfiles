@@ -91,7 +91,10 @@ resolve_directory_path() (
 # local never reads maintenance state; it validates its own destination instead.
 if [ "$action" != local ]; then
     state_base=${XDG_STATE_HOME:-"$HOME/.local/state"}
-    state_dir="$state_base/dotfiles"
+    # Scheduling preserves the logical XDG base; containment and local IO use
+    # the physical directory, whose leaf need not be named dotfiles.
+    scheduler_state_dir="$state_base/dotfiles"
+    state_dir=$scheduler_state_dir
     case "$state_dir" in
         /*) ;;
         *) printf 'XDG_STATE_HOME must be an absolute path\n' >&2; exit 2 ;;
@@ -248,14 +251,19 @@ clean_checkout() {
         printf 'Skipped: checkout contains local changes\n'
         return 1
     fi
-    for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+    no_git_operation Skipped
+}
+
+# One marker set protects both automatic updates and explicit recovery.
+no_git_operation() {
+    for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
         if ! operation_path=$(git_repo rev-parse --git-path "$operation"); then
             printf 'Failed: could not inspect in-progress Git operations\n'
             return 2
         fi
         case "$operation_path" in /*) ;; *) operation_path="$repo/$operation_path" ;; esac
         if [ -e "$operation_path" ]; then
-            printf 'Skipped: a Git operation is in progress\n'
+            printf '%s: a Git operation is in progress (%s)\n' "$1" "$operation"
             return 1
         fi
     done
@@ -490,14 +498,7 @@ recovery_preflight() {
     [ "$(git_repo rev-parse --show-toplevel)" = "$repo" ] || return 1
     git_repo rev-parse --verify 'refs/heads/main^{commit}' >/dev/null || return 1
     git_repo remote get-url origin >/dev/null || return 1
-    for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
-        operation_path=$(git_repo rev-parse --git-path "$operation") || return 1
-        case "$operation_path" in /*) ;; *) operation_path="$repo/$operation_path" ;; esac
-        if [ -e "$operation_path" ]; then
-            printf 'Refused: a Git operation is in progress (%s)\n' "$operation"
-            return 1
-        fi
-    done
+    no_git_operation Refused || return 1
     others=$(git_repo ls-files --others --directory) || return 1
     if [ -n "$others" ]; then
         printf 'Refused: move untracked/ignored paths outside the checkout first:\n%s\n' "$others"
@@ -594,7 +595,7 @@ status() {
                 fi ;;
         esac
     fi
-    /bin/sh "$repo/scripts/scheduler.sh" status "$repo" "$state_dir"
+    /bin/sh "$repo/scripts/scheduler.sh" status "$repo" "$scheduler_state_dir"
     if [ -f "$state_dir/update.log" ]; then
         printf '\nRecent maintenance results:\n'
         tail -n 10 "$state_dir/update.log"
@@ -680,16 +681,16 @@ case "$action" in
         if [ "$eligibility" -gt 1 ]; then exit 1; fi
         if [ "$eligibility" -eq 0 ]; then
             if [ "$dry_run" -eq 1 ]; then
-                /bin/sh "$repo/scripts/scheduler.sh" enable "$repo" "$state_dir" --dry-run
+                /bin/sh "$repo/scripts/scheduler.sh" enable "$repo" "$scheduler_state_dir" --dry-run
             else
-                /bin/sh "$repo/scripts/scheduler.sh" enable "$repo" "$state_dir"
+                /bin/sh "$repo/scripts/scheduler.sh" enable "$repo" "$scheduler_state_dir"
             fi
         fi ;;
     disable)
         if [ "$dry_run" -eq 1 ]; then
-            /bin/sh "$repo/scripts/scheduler.sh" disable "$repo" "$state_dir" --dry-run
+            /bin/sh "$repo/scripts/scheduler.sh" disable "$repo" "$scheduler_state_dir" --dry-run
         else
-            /bin/sh "$repo/scripts/scheduler.sh" disable "$repo" "$state_dir"
+            /bin/sh "$repo/scripts/scheduler.sh" disable "$repo" "$scheduler_state_dir"
         fi ;;
     -h|--help) usage ;;
     *) usage >&2; exit 2 ;;

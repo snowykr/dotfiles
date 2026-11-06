@@ -52,6 +52,10 @@ local requested_parsers = {}
 local started_buffers = {}
 local original_get_parser = vim.treesitter.get_parser
 local original_treesitter_start = vim.treesitter.start
+local original_treesitter_stop = vim.treesitter.stop
+local original_active_highlighters = vim.treesitter.highlighter.active
+vim.treesitter.highlighter.active = {}
+local stopped_buffers = {}
 local original_schedule_wrap = vim.schedule_wrap
 vim.treesitter.get_parser = function(buffer, parser)
     requested_parsers[#requested_parsers + 1] = { buffer = buffer, parser = parser }
@@ -65,6 +69,12 @@ vim.treesitter.get_parser = function(buffer, parser)
 end
 vim.treesitter.start = function(buffer, parser)
     started_buffers[buffer] = parser
+    vim.treesitter.highlighter.active[buffer] = { parser = parser }
+end
+vim.treesitter.stop = function(buffer)
+    stopped_buffers[buffer] = (stopped_buffers[buffer] or 0) + 1
+    started_buffers[buffer] = nil
+    vim.treesitter.highlighter.active[buffer] = nil
 end
 vim.schedule_wrap = function(callback)
     return callback
@@ -134,11 +144,45 @@ equal(started_buffers[typescript_react_buffer], "tsx", "Install completion retai
 equal(started_buffers[tsx_buffer], "tsx", "Install completion retains TSX filetype mapping")
 equal(vim.bo[rust_buffer].indentexpr, "keep-rust-indent", "Install completion continues to skip Rust indentation")
 
+-- FileType transitions must release only the highlighter this config owns.
+vim.bo[python_buffer].filetype = "text"
+equal(started_buffers[python_buffer], nil, "Unsupported FileType stops owned highlighting")
+equal(stopped_buffers[python_buffer], 1, "Unsupported FileType stops exactly once")
+equal(vim.bo[python_buffer].indentexpr, "keep-python-indent", "Detach restores native indentation")
+vim.bo[python_buffer].filetype = "python"
+equal(started_buffers[python_buffer], "python", "Supported FileType reattaches after unsupported type")
+available_parsers.go = nil
+vim.bo[python_buffer].filetype = "go"
+equal(started_buffers[python_buffer], nil, "Missing mapped parser stops previous highlighting")
+equal(vim.bo[python_buffer].indentexpr, "keep-python-indent", "Missing mapped parser restores native indentation")
+vim.bo[python_buffer].filetype = "python"
+equal(started_buffers[python_buffer], "python", "Supported type reattaches after missing mapped parser")
+vim.bo[python_buffer].filetype = "c"
+equal(started_buffers[python_buffer], nil, "Throwing mapped parser stops previous highlighting")
+
+local external_buffer = open_filetype("text", "external-indent")
+local external_highlighter = {}
+vim.treesitter.highlighter.active[external_buffer] = external_highlighter
+vim.bo[external_buffer].filetype = "lua"
+equal(vim.treesitter.highlighter.active[external_buffer], external_highlighter, "Existing external highlighter is not replaced")
+vim.bo[external_buffer].filetype = "text"
+equal(stopped_buffers[external_buffer], nil, "Unsupported type does not stop an unowned highlighter")
+local replacement = {}
+vim.treesitter.highlighter.active[typescript_buffer] = replacement
+vim.bo[typescript_buffer].indentexpr = "new-native-indent"
+vim.bo[typescript_buffer].filetype = "text"
+equal(vim.treesitter.highlighter.active[typescript_buffer], replacement, "Replacement highlighter is not stopped")
+equal(stopped_buffers[typescript_buffer], nil, "Replaced ownership does not call stop")
+equal(vim.bo[typescript_buffer].indentexpr, "new-native-indent", "Detach preserves newer native indentation")
+
 -- Match Lazy startup order: native indentation precedes plugin autocommands.
 vim.cmd("filetype indent on")
 treesitter_plugin.config()
 -- Native indentation can overwrite indentexpr when a same-parser filetype reloads.
+local alias_highlighter = vim.treesitter.highlighter.active[javascript_buffer]
 vim.bo[javascript_buffer].filetype = "javascriptreact"
+equal(vim.treesitter.highlighter.active[javascript_buffer], alias_highlighter, "Same-parser alias retains owned highlighter")
+equal(stopped_buffers[javascript_buffer], nil, "Same-parser alias never stops highlighting")
 equal(vim.bo[javascript_buffer].indentexpr, "v:lua.require'nvim-treesitter'.indentexpr()", "Same-parser FileType restores Treesitter indentation")
 vim.bo[lua_buffer].indentexpr = "native-indent"
 vim.bo[lua_buffer].filetype = "lua"
@@ -147,14 +191,81 @@ equal(vim.bo[lua_buffer].indentexpr, "v:lua.require'nvim-treesitter'.indentexpr(
 -- Unloading detaches the real highlighter; reopening the same buffer must attach again.
 vim.api.nvim_buf_delete(lua_buffer, { unload = true })
 assert(vim.api.nvim_buf_is_valid(lua_buffer), "Unload retains buffer identity")
-started_buffers[lua_buffer] = nil
+equal(started_buffers[lua_buffer], nil, "Unload stops owned highlighting")
 vim.fn.bufload(lua_buffer)
 vim.bo[lua_buffer].filetype = "lua"
 equal(started_buffers[lua_buffer], "lua", "Reloading an unloaded buffer restarts highlighting")
 
 vim.treesitter.get_parser = original_get_parser
 vim.treesitter.start = original_treesitter_start
+vim.treesitter.stop = original_treesitter_stop
+vim.treesitter.highlighter.active = original_active_highlighters
 vim.schedule_wrap = original_schedule_wrap
+vim.api.nvim_del_augroup_by_name("NvimTreesitter")
+
+-- Neovim ships a Lua parser: exercise actual highlighter state without fetching
+-- any parser or plugin. The install stub is deliberately never completed here.
+treesitter_plugin.config()
+local native_buffer = open_filetype("lua", "")
+local native_highlighter = vim.treesitter.highlighter.active[native_buffer]
+assert(native_highlighter, "Bundled Lua parser creates a real highlighter")
+vim.bo[native_buffer].filetype = "text"
+equal(vim.treesitter.highlighter.active[native_buffer], nil, "Real highlighter detaches on unsupported FileType")
+assert(vim.bo[native_buffer].indentexpr ~= "v:lua.require'nvim-treesitter'.indentexpr()", "Real detach restores native indentation")
+vim.bo[native_buffer].filetype = "lua"
+assert(vim.treesitter.highlighter.active[native_buffer], "Real highlighter reattaches on supported FileType")
+vim.api.nvim_buf_delete(native_buffer, { unload = true })
+equal(vim.treesitter.highlighter.active[native_buffer], nil, "Real unload removes highlighter")
+vim.fn.bufload(native_buffer)
+vim.bo[native_buffer].filetype = "lua"
+assert(vim.treesitter.highlighter.active[native_buffer], "Real reload reattaches highlighter")
+vim.api.nvim_buf_delete(native_buffer, { force = true })
+vim.api.nvim_del_augroup_by_name("NvimTreesitter")
+
+-- Dashboard uses the pinned Alpha button(sc, text, keybind) contract. Every
+-- action has an explicit command, rather than feeding an unrelated global map.
+local dashboard = { section = { buttons = { val = {} } }, config = {} }
+dashboard.button = function(shortcut, text, command)
+    assert(type(command) == "string", "Dashboard buttons require explicit commands")
+    return { shortcut = shortcut, text = text, command = command }
+end
+package.preload["alpha.themes.dashboard"] = function()
+    return dashboard
+end
+local alpha_config
+package.preload["alpha"] = function()
+    return { setup = function(config) alpha_config = config end }
+end
+dofile(repo .. "/config/nvim/lua/plugins/alpha.lua").config()
+equal(alpha_config, dashboard.config, "Alpha receives dashboard layout")
+local expected_buttons = {
+    { "e", "New file", "<cmd>enew<CR>" },
+    { "SPC f f", "Find files", "<cmd>Telescope find_files<CR>" },
+    { "r", "Recently opened files", "<cmd>Telescope oldfiles<CR>" },
+    { "SPC f g", "Search text", "<cmd>Telescope live_grep<CR>" },
+    { "SPC f b", "Open buffers", "<cmd>Telescope buffers<CR>" },
+    { "SPC f h", "Help tags", "<cmd>Telescope help_tags<CR>" },
+}
+equal(#dashboard.section.buttons.val, #expected_buttons, "Only implemented dashboard actions are shown")
+local telescope_action
+vim.api.nvim_create_user_command("Telescope", function(command)
+    telescope_action = command.args
+end, { nargs = 1 })
+for index, expected in ipairs(expected_buttons) do
+    local button = dashboard.section.buttons.val[index]
+    equal(button.shortcut, expected[1], "Dashboard shortcut: " .. expected[2])
+    equal(button.text, expected[2], "Dashboard action label")
+    equal(button.command, expected[3], "Dashboard command matches label: " .. expected[2])
+    local command = button.command:match("^<cmd>(.-)<CR>$")
+    assert(command, "Dashboard action is an executable command")
+    vim.cmd(command)
+    if index == 1 then
+        equal(vim.api.nvim_buf_get_name(0), "", "New file opens an unnamed buffer")
+    else
+        equal(telescope_action, expected[3]:match("Telescope ([%w_]+)"), "Dashboard dispatches labeled Telescope action")
+    end
+end
+vim.api.nvim_del_user_command("Telescope")
 
 local refresh_callback
 local registry_ready = false

@@ -55,6 +55,55 @@ case "$config_dir" in
     /*) ;;
     *) printf 'XDG_CONFIG_HOME must be an absolute path\n' >&2; exit 2 ;;
 esac
+# Resolve parents only: the final component may already be our correct symlink.
+# Walk even missing parents without creating them, before any setup side effects.
+validate_destination() (
+    destination=$1
+    case "$destination" in
+        /*) ;;
+        *) printf 'Destination must be absolute: %s\n' "$destination" >&2; exit 2 ;;
+    esac
+    case "$destination" in
+        *'
+'*|*"$(printf '\r')"*|*/../*|*/..)
+            printf 'Invalid destination path: %s\n' "$destination" >&2; exit 2 ;;
+    esac
+    remaining=${destination#/}
+    physical=/
+    while [ "${remaining#*/}" != "$remaining" ]; do
+        component=${remaining%%/*}
+        remaining=${remaining#*/}
+        case "$component" in ''|.) continue ;; esac
+        candidate=${physical%/}/$component
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+            physical=$(CDPATH='' cd -- "$candidate" && pwd -P && printf '.') || {
+                printf 'Cannot resolve destination parent: %s\n' "$candidate" >&2
+                exit 2
+            }
+            # Preserve trailing newlines from pwd until path validation.
+            physical=${physical%?}
+            physical=${physical%?}
+            case "$physical" in
+                *'
+'*|*"$(printf '\r')"*) printf 'Invalid physical parent path\n' >&2; exit 2 ;;
+            esac
+        else
+            physical=$candidate
+        fi
+        case "$physical" in
+            "$repo"|"$repo"/*) printf 'Destination overlaps checkout: %s\n' "$destination" >&2; exit 2 ;;
+        esac
+    done
+    case "${physical%/}/$remaining" in
+        "$repo"|"$repo"/*) printf 'Destination overlaps checkout: %s\n' "$destination" >&2; exit 2 ;;
+    esac
+)
+validate_destination "$HOME/.${mode}rc"
+validate_destination "$config_dir/nvim"
+if [ "$os" = Darwin ]; then
+    validate_destination "$config_dir/ghostty/config"
+fi
+validate_destination "$HOME/.dotfiles-backups/entry"
 printf 'Platform: %s; shell config: %s\n' "$os" "$mode"
 
 if [ "$with_tools" -eq 1 ]; then

@@ -11,7 +11,24 @@ trap 'rm -rf "$root"' EXIT HUP INT TERM
 mkdir -p "$root/mac/.config/nvim" "$root/mac/.config/ghostty" "$root/linux/.config/nvim" "$root/linux/.config/ghostty" "$root/stubs"
 printf '#!/bin/sh\nprintf "%%s\\n" "$MOCK_OS"\n' > "$root/stubs/uname"
 printf '#!/bin/sh\nif [ "$1" = read ]; then\n    case "$2 $3" in\n        "-g AppleInterfaceStyle") if [ "${MOCK_APPLIED:-0}" = 1 ]; then echo Dark; else echo Light; fi;;\n        "-g AppleInterfaceStyleSwitchesAutomatically"|"-g AppleAccentColor"|"-g AppleHighlightColor"|"-g AppleReduceDesktopTinting")\n            [ "${MOCK_APPLIED:-0}" = 1 ] && exit 1\n            echo 1;;\n        "com.apple.menuextra.clock IsAnalog"|"com.apple.menuextra.clock ShowAMPM")\n            [ "${MOCK_CLOCK_UNSET:-0}" != 1 ] || exit 1\n            if [ "${MOCK_CLOCK_APPLIED:-${MOCK_APPLIED:-0}}" = 1 ]; then echo 0; else echo 1; fi;;\n        "com.apple.menuextra.clock Show24Hour"|"com.apple.menuextra.clock ShowSeconds")\n            [ "${MOCK_CLOCK_UNSET:-0}" != 1 ] || exit 1\n            if [ "${MOCK_CLOCK_APPLIED:-${MOCK_APPLIED:-0}}" = 1 ]; then echo 1; else echo 0; fi;;\n        "com.apple.dock autohide") echo 1;;\n        "com.apple.dock autohide-delay") echo 0;;\n        "com.apple.dock autohide-time-modifier") echo 0.5;;\n        "com.apple.dock tilesize") if [ "${MOCK_APPLIED:-0}" = 1 ]; then echo 44; else echo 20; fi;;\n        "com.apple.dock show-recents") echo 0;;\n        "com.apple.finder ShowPathbar") echo 1;;\n        "-g AppleShowAllExtensions") echo 1;;\n        *) exit 1;;\n    esac\nelse\n    printf "%%s\\n" "$*" >> "$TEST_LOG"\nfi\n' > "$root/stubs/defaults"
-printf '#!/bin/sh\nprintf "restart %%s\\n" "$*" >> "$TEST_LOG"\n' > "$root/stubs/killall"
+cat > "$root/stubs/id" <<'ID_STUB'
+#!/bin/sh
+[ "$1" = -un ] || exit 2
+[ "${MOCK_ID_FAIL:-0}" = 0 ] || exit 2
+printf "fixture-user\n"
+ID_STUB
+cat > "$root/stubs/pgrep" <<'PGREP_STUB'
+#!/bin/sh
+[ "$1 $2 $3" = "-u fixture-user -x" ] || exit 2
+[ -z "${PROCESS_LOG:-}" ] || printf "check %s\n" "$4" >> "$PROCESS_LOG"
+exit "${MOCK_PGREP_STATUS:-0}"
+PGREP_STUB
+cat > "$root/stubs/killall" <<'KILLALL_STUB'
+#!/bin/sh
+[ "$1 $2" = "-u fixture-user" ] || exit 2
+printf "restart %s\n" "$3" >> "$TEST_LOG"
+exit "${MOCK_KILLALL_STATUS:-0}"
+KILLALL_STUB
 printf '#!/bin/sh\n[ "${HOMEBREW_NO_ASK:-}" = 1 ] || exit 1\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\n' > "$root/stubs/brew"
 printf '%s\n' '#!/bin/sh
 [ "$1 $2" = "-g custom" ] || exit 2
@@ -30,7 +47,7 @@ printf '%s\n' '#!/bin/sh
 printf "sudo %s\n" "$*" >> "$TEST_LOG"
 [ "${MOCK_SUDO_FAIL:-0}" = 0 ]
 ' > "$root/stubs/sudo"
-chmod +x "$root/stubs/uname" "$root/stubs/defaults" "$root/stubs/killall" "$root/stubs/brew" "$root/stubs/pmset" "$root/stubs/sudo"
+chmod +x "$root/stubs/id" "$root/stubs/pgrep" "$root/stubs/uname" "$root/stubs/defaults" "$root/stubs/killall" "$root/stubs/brew" "$root/stubs/pmset" "$root/stubs/sudo"
 PATH="$root/stubs:$PATH"
 TEST_LOG="$root/preferences"
 MOCK_OS=Darwin
@@ -144,6 +161,68 @@ if MOCK_OS=Darwin HOME="$root/relative-xdg-home" XDG_CONFIG_HOME=relative-config
 fi
 [ ! -e "$root/relative-xdg-home" ]
 
+# Reject unsafe physical parents before invoking packages or Git, even in previews.
+safety_repo="$root/safety repo"
+safety_bin="$root/safety-bin"
+mkdir -p "$safety_repo/scripts" "$safety_repo/config/nvim" "$safety_repo/config/ghostty" "$safety_repo/shell" "$safety_bin"
+cp "$repo/initialize.sh" "$safety_repo/initialize.sh"
+printf 'source sentinel\n' > "$safety_repo/config/nvim/sentinel"
+printf 'ghostty sentinel\n' > "$safety_repo/config/ghostty/config"
+cat > "$safety_repo/scripts/install-tools.sh" <<'PACKAGE_STUB'
+#!/bin/sh
+printf "package %s\n" "$*" >> "$SAFETY_LOG"
+PACKAGE_STUB
+cat > "$safety_bin/git" <<'GIT_STUB'
+#!/bin/sh
+printf "git %s\n" "$*" >> "$SAFETY_LOG"
+GIT_STUB
+chmod +x "$safety_repo/scripts/install-tools.sh" "$safety_bin/git"
+for scenario in direct ancestor missing-parent home backup ghostty dangling file dotdot newline cr; do
+    for preview in real dry; do
+        safety_home="$root/safety $scenario $preview"
+        mkdir -p "$safety_home"
+        safety_config="$safety_home/.config"
+        case "$scenario" in
+            direct) safety_config="$safety_repo/config" ;;
+            ancestor) ln -s "$safety_repo/config" "$safety_config" ;;
+            missing-parent) safety_config="$safety_repo/missing/parents" ;;
+            home) safety_home="$safety_repo" ;;
+            backup) ln -s "$safety_repo/config" "$safety_home/.dotfiles-backups" ;;
+            ghostty)
+                mkdir -p "$safety_config"
+                ln -s "$safety_repo/config/ghostty" "$safety_config/ghostty" ;;
+            dangling) ln -s "$root/no-such-parent" "$safety_config" ;;
+            file) printf 'not a directory\n' > "$safety_config" ;;
+            dotdot) safety_config="$safety_home/../other" ;;
+            newline) safety_config="$safety_home/line
+break" ;;
+            cr) safety_config="$safety_home/$(printf '\r')" ;;
+        esac
+        set --
+        [ "$preview" != dry ] || set -- --dry-run
+        safety_log="$root/safety-$scenario-$preview-log"
+        if PATH="$safety_bin:$PATH" SAFETY_LOG="$safety_log" HOME="$safety_home" XDG_CONFIG_HOME="$safety_config" "$safety_repo/initialize.sh" --no-macos "$@" > "$root/safety-result" 2>&1; then
+            printf 'Unsafe %s destination accepted (%s)\n' "$scenario" "$preview" >&2
+            exit 1
+        fi
+        [ ! -e "$safety_log" ]
+        [ ! -e "$safety_home/.gitconfig" ]
+        [ ! -e "$safety_home/.zshrc" ]
+        [ ! -e "$safety_repo/missing" ]
+        [ ! -L "$safety_repo/config/nvim" ]
+        [ ! -L "$safety_repo/config/ghostty/config" ]
+        [ "$(cat "$safety_repo/config/nvim/sentinel")" = 'source sentinel' ]
+        [ "$(cat "$safety_repo/config/ghostty/config")" = 'ghostty sentinel' ]
+    done
+done
+# Safe ancestor symlinks and missing parents with spaces remain supported.
+mkdir -p "$root/safe physical" "$root/safe home"
+ln -s "$root/safe physical" "$root/safe home/.config"
+HOME="$root/safe home" XDG_CONFIG_HOME="$root/safe home/.config/new parents" "$repo/initialize.sh" --no-packages --no-macos > "$root/safe-result"
+[ "$(readlink "$root/safe physical/new parents/nvim")" = "$repo/config/nvim" ]
+HOME="$root/safe home" XDG_CONFIG_HOME="$root/safe home/.config/new parents" "$repo/initialize.sh" --no-packages --no-macos > "$root/safe-rerun"
+[ ! -e "$root/safe home/.dotfiles-backups" ]
+
 bash --noprofile -c '. "$1"; alias gmg >/dev/null; ! alias gm >/dev/null 2>&1' _ "$repo/shell/common.sh"
 if command -v zsh >/dev/null 2>&1; then
     zsh -f -c 'source "$1"; alias gmg >/dev/null; ! alias gm >/dev/null 2>&1' _ "$repo/shell/common.sh"
@@ -222,6 +301,29 @@ write com.apple.menuextra.clock Show24Hour -bool true
 write com.apple.menuextra.clock ShowAMPM -bool false
 write com.apple.menuextra.clock ShowSeconds -bool true
 restart ControlCenter' ]
+# Restart only changed, current-user services. Absence succeeds; lookup and
+# signal errors propagate rather than being mistaken for an absent GUI session.
+MOCK_APPLIED=1 MOCK_CLOCK_APPLIED=0 PROCESS_LOG="$root/active-processes" TEST_LOG="$root/active-log" "$repo/scripts/macos-defaults.sh" > "$root/active-result"
+[ "$(cat "$root/active-processes")" = 'check ControlCenter' ]
+[ "$(cat "$root/active-log")" = "$(cat "$root/clock-log")" ]
+MOCK_APPLIED=1 MOCK_CLOCK_APPLIED=0 MOCK_PGREP_STATUS=1 PROCESS_LOG="$root/absent-processes" TEST_LOG="$root/absent-log" "$repo/scripts/macos-defaults.sh" > "$root/absent-result"
+[ "$(cat "$root/absent-processes")" = 'check ControlCenter' ]
+[ "$(cat "$root/absent-log")" = 'write com.apple.menuextra.clock IsAnalog -bool false
+write com.apple.menuextra.clock Show24Hour -bool true
+write com.apple.menuextra.clock ShowAMPM -bool false
+write com.apple.menuextra.clock ShowSeconds -bool true' ]
+for failure in MOCK_PGREP_STATUS=2 MOCK_KILLALL_STATUS=1 MOCK_ID_FAIL=1; do
+    if env MOCK_APPLIED=1 MOCK_CLOCK_APPLIED=0 "$failure" TEST_LOG="$root/process-error-log" "$repo/scripts/macos-defaults.sh" > "$root/process-error" 2>&1; then
+        printf 'Process failure should propagate: %s\n' "$failure" >&2
+        exit 1
+    fi
+done
+MOCK_APPLIED=1 MOCK_PGREP_STATUS=2 MOCK_ID_FAIL=1 PROCESS_LOG="$root/unchanged-processes" TEST_LOG="$root/no-restart-log" "$repo/scripts/macos-defaults.sh" > "$root/no-restart-result"
+[ ! -e "$root/unchanged-processes" ]
+[ ! -e "$root/no-restart-log" ]
+MOCK_APPLIED=1 MOCK_CLOCK_APPLIED=0 MOCK_PGREP_STATUS=2 MOCK_ID_FAIL=1 PROCESS_LOG="$root/preview-processes" TEST_LOG="$root/no-restart-preview-log" "$repo/scripts/macos-defaults.sh" --dry-run > "$root/no-restart-preview"
+[ ! -e "$root/preview-processes" ]
+[ ! -e "$root/no-restart-preview-log" ]
 # Missing keys must be written as well; applied settings produce no writes.
 MOCK_APPLIED=1 MOCK_CLOCK_UNSET=1 TEST_LOG="$root/clock-unset-log" "$repo/scripts/macos-defaults.sh" > "$root/clock-unset-result"
 [ "$(cat "$root/clock-unset-log")" = "$(cat "$root/clock-log")" ]

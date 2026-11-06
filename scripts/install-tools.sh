@@ -199,12 +199,15 @@ preflight_toolchain() {
 
 preflight_toolchain || exit 1
 
+tool_is_available() {
+    command -v "$1" >/dev/null 2>&1 || {
+        [ "$1" = fd ] && [ "$os" = Linux ] && command -v fdfind >/dev/null 2>&1
+    }
+}
+
 packages=
 for tool in nvim rg fd starship eza gh lsof; do
-    if command -v "$tool" >/dev/null 2>&1; then
-        continue
-    fi
-    if [ "$tool" = fd ] && [ "$os" = Linux ] && command -v fdfind >/dev/null 2>&1; then
+    if tool_is_available "$tool"; then
         continue
     fi
     case "$tool" in
@@ -293,6 +296,14 @@ if [ "$dry_run" -eq 0 ]; then
         printf 'The installed Neovim is not 0.12 or newer. Install a recent official Neovim and rerun.\n' >&2
         exit 1
     fi
+    tools_ok=1
+    for tool in rg fd starship eza gh lsof curl; do
+        if ! tool_is_available "$tool"; then
+            printf 'Installation completed but required command %s is still unavailable on PATH. Repair the package links or PATH and rerun setup.\n' "$tool" >&2
+            tools_ok=0
+        fi
+    done
+    [ "$tools_ok" -eq 1 ] || exit 1
 fi
 
 # Upstream looks for bundled files beside its installer; use a private directory.

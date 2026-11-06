@@ -59,7 +59,7 @@ run_maintain() {
 }
 
 # Clone before publication so these checkouts really are behind the remote.
-for name in clean dry dirty staged untracked ignored feature detached diverged concurrent mid-fetch switch-fetch head-fetch interrupted timeout merge-switch merge-capture merge-late merge-concurrent guard-version unguarded; do
+for name in clean dry dirty staged untracked ignored feature detached diverged concurrent mid-fetch switch-fetch head-fetch interrupted timeout merge-switch merge-capture merge-late merge-concurrent guard-version unguarded operation-bisect operation-MERGE_HEAD operation-CHERRY_PICK_HEAD operation-REVERT_HEAD operation-REBASE_HEAD operation-rebase-merge operation-rebase-apply operation-sequencer operation-BISECT_START; do
     new_checkout "$name"
 done
 printf 'alias fresh=true\n' >> "$root/publisher/shell/common.sh"
@@ -119,6 +119,41 @@ for case_name in dirty staged untracked feature detached diverged; do
     assert_eq "$(cat "$checkout/shell/common.sh")" "$before_contents"
     case "$(cat "$root/$case_name-output")" in *"Skipped:"*) ;; *) exit 1 ;; esac
     [ ! -e "$state_home/dotfiles/update.lock" ]
+done
+
+# Every operation marker blocks update and recovery before fetching a pending FF.
+for operation in bisect MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
+    checkout="$root/checkouts/operation-$operation"
+    state_home="$root/state/operation-$operation"
+    if [ "$operation" = bisect ]; then
+        git -C "$checkout" bisect start --no-checkout
+        git -C "$checkout" bisect bad HEAD
+        marker_path="$checkout/.git/BISECT_START"
+    else
+        marker_path=$(git -C "$checkout" rev-parse --git-path "$operation")
+        case "$marker_path" in /*) ;; *) marker_path="$checkout/$marker_path";; esac
+        case "$operation" in
+            rebase-merge|rebase-apply|sequencer) mkdir "$marker_path" ;;
+            *) printf '%s\n' "$old" > "$marker_path" ;;
+        esac
+    fi
+    cp "$checkout/.git/index" "$root/operation-index"
+    run_maintain update --dry-run > "$root/operation-preview"
+    grep -F 'Skipped: a Git operation is in progress' "$root/operation-preview"
+    [ ! -e "$state_home" ]
+    run_maintain update > "$root/operation-output"
+    grep -F 'Skipped: a Git operation is in progress' "$root/operation-output"
+    if run_maintain recover --discard-changes > "$root/operation-recovery" 2>&1; then
+        printf 'Recovery must refuse active Git operations\n' >&2
+        exit 1
+    fi
+    grep -F 'Refused: a Git operation is in progress' "$root/operation-recovery"
+    assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$old"
+    assert_eq "$(git -C "$checkout" rev-parse origin/main)" "$old"
+    assert_eq "$(git -C "$checkout" symbolic-ref HEAD)" refs/heads/main
+    cmp "$checkout/.git/index" "$root/operation-index"
+    [ -e "$marker_path" ]
+    [ ! -e "$checkout/.git/FETCH_HEAD" ]
 done
 
 # Ignored files can be invisible to status but must not be overwritten by checkout.
