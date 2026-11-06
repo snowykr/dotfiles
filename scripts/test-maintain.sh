@@ -212,7 +212,9 @@ for arg in "$@"; do
     fi
     if [ "$arg" = fetch ]; then
         [ "$GIT_TERMINAL_PROMPT" = 0 ] && [ "$GCM_INTERACTIVE" = never ] && [ "$GH_PROMPT_DISABLED" = 1 ] || exit 99
-        if [ "${FETCH_MODE:-}" = edit ]; then
+        if [ "${FETCH_MODE:-}" = slow-success ]; then
+            "$REAL_SLEEP" 0.3
+        elif [ "${FETCH_MODE:-}" = edit ]; then
             printf "edit during fetch\n" >> "$EDIT_FILE"
         elif [ "${FETCH_MODE:-}" = switch ]; then
             "$REAL_GIT" -C "$EDIT_REPO" switch -q -c changed-during-fetch
@@ -425,6 +427,16 @@ updater=
 [ ! -e "$state_home/dotfiles/update.lock" ]
 child_state=$(ps -p "$(cat "$FETCH_CHILD")" -o stat= || :)
 case "$child_state" in ''|Z*) ;; *) printf 'Helper survived timeout grace cancellation\n' >&2; exit 1 ;; esac
+
+# Ordinary fetches after deadline tests must not inherit the accelerated clock.
+rm "$root/bin/sleep"
+new_checkout normal-deadline
+env FETCH_MODE=slow-success PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/normal-deadline-output" 2>&1 || {
+    cat "$root/normal-deadline-output" >&2
+    exit 1
+}
+[ ! -e "$state_home/dotfiles/update.lock" ]
+assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$latest"
 
 new_checkout controls
 run_maintain status > "$root/status-output"
