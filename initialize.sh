@@ -97,6 +97,15 @@ validate_destination() (
     case "${physical%/}/$remaining" in
         "$repo"|"$repo"/*) printf 'Destination overlaps checkout: %s\n' "$destination" >&2; exit 2 ;;
     esac
+    # Moving a real destination directory also moves every source below it.
+    # Moving a final symlink moves only the link, so its referent stays untouched.
+    if [ ! -L "$destination" ] && [ -d "$destination" ]; then
+        case "$repo/" in
+            "${physical%/}/$remaining/"*)
+                printf 'Destination contains checkout: %s\n' "$destination" >&2
+                exit 2 ;;
+        esac
+    fi
 )
 validate_destination "$HOME/.${mode}rc"
 validate_destination "$config_dir/nvim"

@@ -215,6 +215,53 @@ break" ;;
         [ "$(cat "$safety_repo/config/ghostty/config")" = 'ghostty sentinel' ]
     done
 done
+# A real destination containing the checkout must not move the source into backup.
+for scenario in direct alias-parent; do
+    for preview in real dry; do
+        reverse_home="$root/reverse-$scenario-$preview-home"
+        mkdir -p "$reverse_home"
+        reverse_config="$reverse_home/.config"
+        if [ "$scenario" = alias-parent ]; then
+            reverse_config="$root/reverse-$scenario-$preview-physical"
+            mkdir -p "$reverse_config"
+            ln -s "$reverse_config" "$reverse_home/.config"
+        fi
+        mkdir -p "$reverse_config/nvim"
+        cp -R "$safety_repo" "$reverse_config/nvim/dotfiles"
+        reverse_repo="$reverse_config/nvim/dotfiles"
+        printf 'user file\n' > "$reverse_config/nvim/user-file"
+        set --
+        [ "$preview" != dry ] || set -- --dry-run
+        reverse_log="$root/reverse-$scenario-$preview-log"
+        if MOCK_OS=Darwin PATH="$safety_bin:$PATH" SAFETY_LOG="$reverse_log" HOME="$reverse_home" XDG_CONFIG_HOME="$reverse_home/.config" "$reverse_repo/initialize.sh" --no-macos "$@" > "$root/reverse-result" 2>&1; then
+            printf 'Destination containing checkout accepted (%s %s)\n' "$scenario" "$preview" >&2
+            exit 1
+        fi
+        grep -F 'Destination contains checkout:' "$root/reverse-result"
+        [ ! -e "$reverse_log" ]
+        [ ! -e "$reverse_home/.gitconfig" ]
+        [ ! -e "$reverse_home/.zshrc" ]
+        [ ! -e "$reverse_home/.dotfiles-backups" ]
+        [ ! -L "$reverse_config/nvim" ]
+        [ "$(cat "$reverse_config/nvim/user-file")" = 'user file' ]
+        cmp "$repo/initialize.sh" "$reverse_repo/initialize.sh"
+        [ "$(cat "$reverse_repo/config/nvim/sentinel")" = 'source sentinel' ]
+    done
+done
+# A final symlink to a source ancestor is safe to back up: its referent stays put.
+reverse_home="$root/reverse-safe-home"
+reverse_container="$root/reverse-safe-container"
+mkdir -p "$reverse_home/.config" "$reverse_container"
+cp -R "$safety_repo" "$reverse_container/dotfiles"
+reverse_repo=$(CDPATH='' cd -- "$reverse_container/dotfiles" && pwd -P)
+ln -s "$reverse_container" "$reverse_home/.config/nvim"
+MOCK_OS=Darwin HOME="$reverse_home" "$reverse_repo/initialize.sh" --no-packages --no-macos > "$root/reverse-safe-result"
+[ "$(readlink "$reverse_home/.config/nvim")" = "$reverse_repo/config/nvim" ]
+[ "$(cat "$reverse_repo/config/nvim/sentinel")" = 'source sentinel' ]
+set -- "$reverse_home/.dotfiles-backups"/*/.config/nvim
+[ "$#" -eq 1 ] && [ "$(readlink "$1")" = "$reverse_container" ]
+MOCK_OS=Darwin HOME="$reverse_home" "$reverse_repo/initialize.sh" --no-packages --no-macos > "$root/reverse-safe-rerun"
+
 # Safe ancestor symlinks and missing parents with spaces remain supported.
 mkdir -p "$root/safe physical" "$root/safe home"
 ln -s "$root/safe physical" "$root/safe home/.config"
