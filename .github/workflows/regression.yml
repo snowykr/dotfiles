@@ -1,0 +1,67 @@
+name: Regression tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: Regression (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Linux test shell
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install verified Neovim 0.12.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)/$(uname -m)" in
+            Linux/x86_64)
+              archive=nvim-linux-x86_64
+              digest=012bf3fcac5ade43914df3f174668bf64d05e049a4f032a388c027b1ebd78628 ;;
+            Darwin/arm64)
+              archive=nvim-macos-arm64
+              digest=51ab83afa66d663627c2ab1be43209b0f4e81360d4598b53efaa4d8195f24c89 ;;
+            Darwin/x86_64)
+              archive=nvim-macos-x86_64
+              digest=03fe16f8dd9f1e9eaf52d5e294913a39917b9e2faea30d7fb0fb385fbd36fe59 ;;
+            *) printf 'Unsupported CI platform\n' >&2; exit 1 ;;
+          esac
+          curl --fail --location --retry 3 "https://github.com/neovim/neovim/releases/download/v0.12.4/$archive.tar.gz" -o "$RUNNER_TEMP/$archive.tar.gz"
+          printf '%s  %s\n' "$digest" "$RUNNER_TEMP/$archive.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$RUNNER_TEMP/$archive.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$archive/bin" >> "$GITHUB_PATH"
+      - name: Run all isolated regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in initialize maintain scheduler install-tools local-overrides shell; do
+            sh "scripts/test-$suite.sh"
+          done
+          nvim --headless -u NONE -l scripts/test-nvim.lua
+      - name: Check shell syntax and whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n initialize.sh maintain.sh
+          for script in scripts/*.sh; do sh -n "$script"; done
+          bash -n shell/bashrc shell/common.sh
+          zsh -n shell/zshrc
+          git diff --check

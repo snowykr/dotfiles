@@ -116,6 +116,10 @@ if [ "$action" = status ]; then
 fi
 check_owned "$definition"
 [ "$os" != Linux ] || check_owned "$timer"
+# A loaded label alone is not proof that this checkout owns the job.
+if [ "$os" = Darwin ] && [ "$action" = enable ] && ! owned "$definition" && is_active; then
+    fail "refusing to replace loaded scheduler without generated definition: $definition"
+fi
 if [ "$dry_run" -eq 1 ]; then
     printf 'Would %s %s scheduler: /bin/sh %s/maintain.sh update (state: %s)\n' "$action" "$os" "$repo" "$state"
     exit 0

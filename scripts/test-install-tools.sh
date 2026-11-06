@@ -48,11 +48,11 @@ chmod +x "$output_file"
 COMPILER
 chmod +x "$root/compiler"
 cp "$root/compiler" "$root/bin/cc"
-printf '#!/bin/sh\n[ "${HOMEBREW_NO_ASK:-}" = 1 ] || exit 91\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    neovim) cp "$MOCK_NVIM" "$MOCK_BIN/nvim";;\n    ripgrep) tool=rg;;\n    *) tool=$2;;\nesac\n[ "$2" = neovim ] || cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\n' > "$root/bin/brew"
-printf '#!/bin/sh\nprintf "sudo %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    update) : > "$APT_UPDATE_MARKER"; exit 0;;\n    install) ;;\n    *) exit 0;;\nesac\nshift 3\nfor package in "$@"; do\n    case "$package" in\n        ripgrep) tool=rg;; fd-find) tool=fdfind;;\n        curl) cp "$MOCK_CURL" "$MOCK_BIN/curl"; continue;;\n        *) tool=$package;;\n    esac\n    cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\ndone\n' > "$root/bin/sudo"
+printf '#!/bin/sh\n[ "${HOMEBREW_NO_ASK:-}" = 1 ] || exit 91\nprintf "brew %%s\\n" "$*" >> "$TEST_LOG"\n[ "$2" != "${MOCK_SKIP_PACKAGE:-}" ] || exit 0\ncase "$2" in\n    neovim) cp "$MOCK_NVIM" "$MOCK_BIN/nvim";;\n    ripgrep) tool=rg;;\n    *) tool=$2;;\nesac\n[ "$2" = neovim ] || cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\n' > "$root/bin/brew"
+printf '#!/bin/sh\nprintf "sudo %%s\\n" "$*" >> "$TEST_LOG"\ncase "$2" in\n    update) : > "$APT_UPDATE_MARKER"; exit 0;;\n    install) ;;\n    *) exit 0;;\nesac\nshift 3\nfor package in "$@"; do\n    [ "$package" != "${MOCK_SKIP_PACKAGE:-}" ] || continue\n    case "$package" in\n        ripgrep) tool=rg;; fd-find) tool=fdfind;;\n        curl) cp "$MOCK_CURL" "$MOCK_BIN/curl"; continue;;\n        *) tool=$package;;\n    esac\n    cp "$MOCK_TOOL" "$MOCK_BIN/$tool"\ndone\n' > "$root/bin/sudo"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$APT_CACHE_LOG"\n[ -e "$APT_UPDATE_MARKER" ] || exit 1\nif [ "$2" = "$MOCK_NO_CANDIDATE" ]; then\n    exit 0\nelse\n    printf "Candidate: 1.0\\n"\nfi\n' > "$root/bin/apt-cache"
 printf '#!/bin/sh\nexit 0\n' > "$root/bin/apt-get"
-printf '#!/bin/sh\nmkdir -p "$HOME/.local/bin"\ncp "$MOCK_TOOL" "$HOME/.local/bin/starship"\n' > "$root/installer"
+printf '#!/bin/sh\n[ "${MOCK_SKIP_STARSHIP:-0}" = 0 ] || exit 0\nmkdir -p "$HOME/.local/bin"\ncp "$MOCK_TOOL" "$HOME/.local/bin/starship"\n' > "$root/installer"
 cat > "$root/tacit-installer" <<'INSTALLER'
 #!/bin/sh
 set -eu
@@ -455,6 +455,28 @@ rm "$root/bin/rg"
 TEST_LOG="$root/partial-log" HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/partial-output"
 [ "$(cat "$root/partial-log")" = 'sudo apt-get update
 sudo apt-get install -y ripgrep' ]
+
+# A successful manager can leave an unlinked or out-of-PATH executable missing.
+for platform in Darwin Linux; do
+    rm "$root/bin/rg"
+    : > "$TACIT_DOWNLOAD_LOG"
+    if MOCK_OS="$platform" MOCK_SKIP_PACKAGE=ripgrep HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1; then
+        printf 'A successful package operation without rg must fail setup\n' >&2
+        exit 1
+    fi
+    case "$(cat "$root/error")" in *'required command rg is still unavailable on PATH'*'Repair the package links or PATH'*) ;; *) exit 1 ;; esac
+    [ ! -s "$TACIT_DOWNLOAD_LOG" ]
+    # Preview still reports work rather than requiring installation side effects.
+    MOCK_OS="$platform" MOCK_SKIP_PACKAGE=ripgrep HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" --dry-run > "$root/postcheck-preview"
+    cp "$root/tool" "$root/bin/rg"
+done
+rm "$root/home/.local/bin/starship"
+if MOCK_SKIP_STARSHIP=1 HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1; then
+    printf 'A successful Starship installer without its executable must fail setup\n' >&2
+    exit 1
+fi
+case "$(cat "$root/error")" in *'required command starship is still unavailable on PATH'*) ;; *) exit 1 ;; esac
+cp "$root/tool" "$root/home/.local/bin/starship"
 
 if MOCK_OS=FreeBSD HOME="$root/home" PATH="$root/bin" "$repo/scripts/install-tools.sh" > "$root/error" 2>&1; then
     printf 'Unsupported OS should fail even with all tools installed\n' >&2

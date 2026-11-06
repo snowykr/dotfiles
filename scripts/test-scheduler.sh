@@ -239,6 +239,27 @@ for MOCK_OS in Darwin Linux; do
     run enable --dry-run > "$root/preview"
     run disable --dry-run > "$root/preview"
     [ ! -e "$MOCK_LOG" ] && [ ! -e "$HOME" ] && [ ! -e "$state" ] && [ ! -e "$MOCK_MANAGER_CONFIG" ]
+    if [ "$MOCK_OS" = Darwin ]; then
+        # An unknown loaded job must survive enable, including previews.
+        printf 'foreign loaded job\n' > "$MOCK_LOADED"
+        cp "$MOCK_LOADED" "$root/foreign-loaded"
+        expect_failure enable
+        expect_failure enable --dry-run
+        expect_failure disable
+        cmp "$MOCK_LOADED" "$root/foreign-loaded"
+        [ ! -e "$MOCK_LOG" ] && [ ! -e "$HOME" ] && [ ! -e "$state" ]
+        definition=$HOME/Library/LaunchAgents/com.snowykr.dotfiles.update.plist
+        mkdir -p "${definition%/*}"
+        printf 'foreign definition\n' > "$definition"
+        cp "$definition" "$root/foreign-definition"
+        expect_failure enable
+        expect_failure enable --dry-run
+        expect_failure disable
+        cmp "$definition" "$root/foreign-definition"
+        cmp "$MOCK_LOADED" "$root/foreign-loaded"
+        [ ! -e "$MOCK_LOG" ] && [ ! -e "$state" ]
+        rm "$definition" "$MOCK_LOADED"
+    fi
     if [ "$MOCK_OS" = Linux ]; then
         # Foreign manager fragments are rejected without touching the manager or local state.
         mkdir -p "$MOCK_MANAGER_CONFIG/systemd/user"
@@ -525,6 +546,58 @@ grep -F "Environment=\"XDG_CONFIG_HOME=$XDG_CONFIG_HOME\"" "$definition"
 [ "$(readlink -f -- "$manager_service")" = "$(readlink -f -- "$definition")" ]
 [ "$(run disable)" = disabled ]
 [ ! -e "$manager_service" ] && [ ! -e "$manager_timer" ]
+# Compose the real maintenance frontend and backend with a symlinked state leaf.
+# Only the native manager is mocked: scheduled updates must retain the logical base.
+MOCK_OS=Darwin
+HOME="$root/composed-home"
+XDG_CONFIG_HOME="$root/composed-config"
+XDG_STATE_HOME="$root/composed-state"
+MOCK_LOG="$root/composed.mutations"
+MOCK_LOADED="$root/composed.loaded"
+MOCK_BOOTOUT_FAIL_ONCE=0
+checkout="$root/composed-repo"
+export MOCK_OS HOME XDG_CONFIG_HOME XDG_STATE_HOME MOCK_LOG MOCK_LOADED MOCK_BOOTOUT_FAIL_ONCE
+mkdir -p "$checkout/scripts" "$XDG_STATE_HOME" "$root/recovery-storage"
+cp "$repo/maintain.sh" "$checkout/maintain.sh"
+cp "$repo/scripts/scheduler.sh" "$checkout/scripts/scheduler.sh"
+git init -q --initial-branch=main "$checkout"
+git -C "$checkout" -c user.name=Test -c user.email=test@example.test add .
+git -C "$checkout" -c user.name=Test -c user.email=test@example.test commit -qm initial
+git -C "$checkout" remote add origin "$root/unused-remote"
+ln -s "$root/recovery-storage" "$XDG_STATE_HOME/dotfiles"
+composed() { /bin/sh "$checkout/maintain.sh" "$@"; }
+composed status > "$root/composed-status"
+grep -x disabled "$root/composed-status"
+composed enable --dry-run > "$root/composed-preview"
+grep -F "$XDG_STATE_HOME/dotfiles" "$root/composed-preview"
+composed disable --dry-run > "$root/composed-preview"
+[ ! -e "$MOCK_LOG" ] && [ ! -e "$HOME" ]
+[ "$(composed enable)" = enabled ]
+definition=$HOME/Library/LaunchAgents/com.snowykr.dotfiles.update.plist
+grep -F "<key>XDG_STATE_HOME</key><string>$XDG_STATE_HOME</string>" "$definition"
+grep -F "<string>$XDG_STATE_HOME/dotfiles/scheduler.log</string>" "$definition"
+composed status > "$root/composed-status"
+grep -x enabled "$root/composed-status"
+cp "$MOCK_LOG" "$root/composed-before-preview"
+composed enable --dry-run > "$root/composed-preview"
+composed disable --dry-run > "$root/composed-preview"
+cmp "$MOCK_LOG" "$root/composed-before-preview"
+[ "$(composed disable)" = disabled ]
+[ ! -e "$definition" ] && [ ! -e "$MOCK_LOADED" ]
+composed status > "$root/composed-status"
+grep -x disabled "$root/composed-status"
+# Physical containment still rejects a logical path pointing into the repository.
+rm "$XDG_STATE_HOME/dotfiles"
+ln -s "$checkout" "$XDG_STATE_HOME/dotfiles"
+cp "$MOCK_LOG" "$root/composed-before-refusal"
+for action in status enable disable; do
+    if composed "$action" > "$root/composed-refusal" 2>&1; then
+        printf 'Expected repository-contained state refusal\n' >&2
+        exit 1
+    fi
+    grep -F 'Maintenance state must be outside the repository' "$root/composed-refusal"
+done
+cmp "$MOCK_LOG" "$root/composed-before-refusal"
 MOCK_OS=FreeBSD; export MOCK_OS
 expect_failure enable
 MOCK_OS=Linux; export MOCK_OS

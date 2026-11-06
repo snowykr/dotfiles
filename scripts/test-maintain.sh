@@ -59,7 +59,7 @@ run_maintain() {
 }
 
 # Clone before publication so these checkouts really are behind the remote.
-for name in clean dry dirty staged untracked ignored feature detached diverged concurrent mid-fetch switch-fetch head-fetch interrupted timeout merge-switch merge-capture merge-late merge-concurrent guard-version unguarded; do
+for name in clean dry dirty staged untracked ignored feature detached diverged concurrent mid-fetch switch-fetch head-fetch interrupted timeout merge-switch merge-capture merge-late merge-concurrent guard-version unguarded operation-bisect operation-MERGE_HEAD operation-CHERRY_PICK_HEAD operation-REVERT_HEAD operation-REBASE_HEAD operation-rebase-merge operation-rebase-apply operation-sequencer operation-BISECT_START; do
     new_checkout "$name"
 done
 printf 'alias fresh=true\n' >> "$root/publisher/shell/common.sh"
@@ -121,6 +121,41 @@ for case_name in dirty staged untracked feature detached diverged; do
     [ ! -e "$state_home/dotfiles/update.lock" ]
 done
 
+# Every operation marker blocks update and recovery before fetching a pending FF.
+for operation in bisect MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
+    checkout="$root/checkouts/operation-$operation"
+    state_home="$root/state/operation-$operation"
+    if [ "$operation" = bisect ]; then
+        git -C "$checkout" bisect start --no-checkout
+        git -C "$checkout" bisect bad HEAD
+        marker_path="$checkout/.git/BISECT_START"
+    else
+        marker_path=$(git -C "$checkout" rev-parse --git-path "$operation")
+        case "$marker_path" in /*) ;; *) marker_path="$checkout/$marker_path";; esac
+        case "$operation" in
+            rebase-merge|rebase-apply|sequencer) mkdir "$marker_path" ;;
+            *) printf '%s\n' "$old" > "$marker_path" ;;
+        esac
+    fi
+    cp "$checkout/.git/index" "$root/operation-index"
+    run_maintain update --dry-run > "$root/operation-preview"
+    grep -F 'Skipped: a Git operation is in progress' "$root/operation-preview"
+    [ ! -e "$state_home" ]
+    run_maintain update > "$root/operation-output"
+    grep -F 'Skipped: a Git operation is in progress' "$root/operation-output"
+    if run_maintain recover --discard-changes > "$root/operation-recovery" 2>&1; then
+        printf 'Recovery must refuse active Git operations\n' >&2
+        exit 1
+    fi
+    grep -F 'Refused: a Git operation is in progress' "$root/operation-recovery"
+    assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$old"
+    assert_eq "$(git -C "$checkout" rev-parse origin/main)" "$old"
+    assert_eq "$(git -C "$checkout" symbolic-ref HEAD)" refs/heads/main
+    cmp "$checkout/.git/index" "$root/operation-index"
+    [ -e "$marker_path" ]
+    [ ! -e "$checkout/.git/FETCH_HEAD" ]
+done
+
 # Ignored files can be invisible to status but must not be overwritten by checkout.
 case_name=ignored
 checkout="$root/checkouts/$case_name"
@@ -177,7 +212,9 @@ for arg in "$@"; do
     fi
     if [ "$arg" = fetch ]; then
         [ "$GIT_TERMINAL_PROMPT" = 0 ] && [ "$GCM_INTERACTIVE" = never ] && [ "$GH_PROMPT_DISABLED" = 1 ] || exit 99
-        if [ "${FETCH_MODE:-}" = edit ]; then
+        if [ "${FETCH_MODE:-}" = slow-success ]; then
+            "$REAL_SLEEP" 0.3
+        elif [ "${FETCH_MODE:-}" = edit ]; then
             printf "edit during fetch\n" >> "$EDIT_FILE"
         elif [ "${FETCH_MODE:-}" = switch ]; then
             "$REAL_GIT" -C "$EDIT_REPO" switch -q -c changed-during-fetch
@@ -390,6 +427,16 @@ updater=
 [ ! -e "$state_home/dotfiles/update.lock" ]
 child_state=$(ps -p "$(cat "$FETCH_CHILD")" -o stat= || :)
 case "$child_state" in ''|Z*) ;; *) printf 'Helper survived timeout grace cancellation\n' >&2; exit 1 ;; esac
+
+# Ordinary fetches after deadline tests must not inherit the accelerated clock.
+rm "$root/bin/sleep"
+new_checkout normal-deadline
+env FETCH_MODE=slow-success PATH="$root/bin:$PATH" XDG_STATE_HOME="$state_home" /bin/sh "$checkout/maintain.sh" update > "$root/normal-deadline-output" 2>&1 || {
+    cat "$root/normal-deadline-output" >&2
+    exit 1
+}
+[ ! -e "$state_home/dotfiles/update.lock" ]
+assert_eq "$(git -C "$checkout" rev-parse HEAD)" "$latest"
 
 new_checkout controls
 run_maintain status > "$root/status-output"

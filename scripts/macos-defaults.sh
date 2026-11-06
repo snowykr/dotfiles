@@ -96,10 +96,22 @@ ensure_pref com.apple.dock show-recents bool false Dock
 ensure_pref com.apple.finder ShowPathbar bool true Finder
 ensure_pref -g AppleShowAllExtensions bool true Finder
 
+restart_service() {
+    service=$1
+    user_name=$(id -un) || return
+    if pgrep -u "$user_name" -x "$service" >/dev/null; then
+        killall -u "$user_name" "$service"
+    else
+        status=$?
+        # pgrep uses 1 for no match; other failures must remain visible.
+        [ "$status" -eq 1 ] || return "$status"
+    fi
+}
+
 if [ "$dry_run" -eq 0 ]; then
-    [ "$dock_changed" -eq 0 ] || killall Dock
-    [ "$finder_changed" -eq 0 ] || killall Finder
-    [ "$clock_changed" -eq 0 ] || killall ControlCenter
+    [ "$dock_changed" -eq 0 ] || restart_service Dock
+    [ "$finder_changed" -eq 0 ] || restart_service Finder
+    [ "$clock_changed" -eq 0 ] || restart_service ControlCenter
     if [ "$appearance_changed" -eq 1 ]; then
         printf 'Appearance may require logging out and back in to update every app.\n'
     fi

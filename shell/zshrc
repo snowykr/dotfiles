@@ -4,7 +4,7 @@
 typeset -U path
 if [[ "$OSTYPE" == darwin* ]]; then
     for directory in /opt/homebrew/bin /usr/local/bin; do
-        [[ -d "$directory" ]] && path=("$directory" $path)
+        [[ -d "$directory" ]] && path+=("$directory")
     done
 fi
 for directory in "$HOME/.local/bin" "$HOME/.bun/bin" "$HOME/.opencode/bin" "$HOME/.pyenv/bin" "$HOME/.rbenv/bin"; do
@@ -36,6 +36,7 @@ export NVM_DIR="$HOME/.nvm"
 GJCDEV_REPO="$HOME/Documents/coding/gajae-code-upstream"
 _dotfiles_zsh_source=$(readlink "$HOME/.zshrc")
 if [[ -n "$_dotfiles_zsh_source" ]]; then
+    [[ "$_dotfiles_zsh_source" == /* ]] || _dotfiles_zsh_source="$HOME/$_dotfiles_zsh_source"
     source "${_dotfiles_zsh_source:h}/common.sh"
 fi
 unset _dotfiles_zsh_source
@@ -45,16 +46,29 @@ alias s='source "$HOME/.zshrc"'
 # Preserve Ghostty's current directory across ssh/tmux splits.
 _ghostty_osc7_cwd() {
     emulate -L zsh
-    local encoded="${PWD}"
-    encoded="${encoded//\%/%25}"
-    encoded="${encoded// /%20}"
-    encoded="${encoded//\#/%23}"
-    encoded="${encoded//\?/%3F}"
-    encoded="${encoded//\[/%5B}"
-    encoded="${encoded//\]/%5D}"
-    local osc=$'\e]7;file://'"${USER}@${HOST}${encoded}"$'\a'
+    local LC_ALL=C
+    unsetopt MULTIBYTE
+    local value byte hex encoded osc
+    local -a fields
+    integer i
+    # Encode bytes, not codepoints; only the path may retain URI slashes.
+    for value in "$USER" "$HOST" "$PWD"; do
+        encoded=''
+        for (( i = 1; i <= ${#value}; i++ )); do
+            byte=${value[i]}
+            if [[ "$byte" == [a-zA-Z0-9._~-] || ( ${#fields} == 2 && "$byte" == / ) ]]; then
+                encoded+="$byte"
+            else
+                printf -v hex '%%%02X' "'$byte"
+                encoded+="$hex"
+            fi
+        done
+        fields+=("$encoded")
+    done
+    osc=$'\e]7;file://'"${fields[1]}@${fields[2]}${fields[3]}"$'\a'
     if [[ -n "${TMUX:-}" ]]; then
-        printf '\ePtmux;\e%s\e\\' "$osc"
+        osc=${osc//$'\e'/$'\e\e'}
+        printf '\ePtmux;%s\e\\' "$osc"
     else
         printf '%s' "$osc"
     fi

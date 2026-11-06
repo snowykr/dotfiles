@@ -47,6 +47,10 @@ fi
 
 _dotfiles_bash_source=$(readlink "$HOME/.bashrc")
 if [ -n "$_dotfiles_bash_source" ]; then
+    case "$_dotfiles_bash_source" in
+        /*) ;;
+        *) _dotfiles_bash_source="$HOME/$_dotfiles_bash_source" ;;
+    esac
     . "$(dirname "$_dotfiles_bash_source")/common.sh"
 fi
 unset _dotfiles_bash_source

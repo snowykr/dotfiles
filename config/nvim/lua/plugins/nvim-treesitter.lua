@@ -30,40 +30,39 @@ local parser_by_filetype = {
     go = "go",
 }
 
-local filetypes = {
-    "lua",
-    "python",
-    "c",
-    "rust",
-    "markdown",
-    "vim",
-    "sql",
-    "typescript",
-    "typescriptreact",
-    "tsx",
-    "javascript",
-    "javascriptreact",
-    "html",
-    "go",
-}
-
 local attached_parsers = {}
+local indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+
+local function detach(buffer)
+    local attached = attached_parsers[buffer]
+    if not attached then
+        return
+    end
+    if vim.treesitter.highlighter.active[buffer] == attached.highlighter then
+        vim.treesitter.stop(buffer)
+    end
+    if vim.bo[buffer].indentexpr == indentexpr then
+        vim.bo[buffer].indentexpr = attached.indentexpr
+    end
+    attached_parsers[buffer] = nil
+end
 
 local function attach(buffer)
     local parser = parser_by_filetype[vim.bo[buffer].filetype]
-    if not parser then
-        return false
-    end
-
-    if attached_parsers[buffer] == parser then
+    local attached = attached_parsers[buffer]
+    local highlighter = vim.treesitter.highlighter.active[buffer]
+    if attached and attached.parser == parser and attached.highlighter == highlighter then
         if parser ~= "rust" then
-            vim.bo[buffer].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+            if vim.bo[buffer].indentexpr ~= indentexpr then
+                attached.indentexpr = vim.bo[buffer].indentexpr
+            end
+            vim.bo[buffer].indentexpr = indentexpr
         end
         return true
     end
-    if attached_parsers[buffer] then
-        vim.treesitter.stop(buffer)
-        attached_parsers[buffer] = nil
+    detach(buffer)
+    if not parser or vim.treesitter.highlighter.active[buffer] then
+        return false
     end
 
     local available, tree = pcall(vim.treesitter.get_parser, buffer, parser)
@@ -76,9 +75,17 @@ local function attach(buffer)
         return false
     end
 
-    attached_parsers[buffer] = parser
+    highlighter = vim.treesitter.highlighter.active[buffer]
+    if not highlighter then
+        return false
+    end
+    attached_parsers[buffer] = {
+        parser = parser,
+        highlighter = highlighter,
+        indentexpr = vim.bo[buffer].indentexpr,
+    }
     if parser ~= "rust" then
-        vim.bo[buffer].indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+        vim.bo[buffer].indentexpr = indentexpr
     end
     return true
 end
@@ -109,7 +116,7 @@ return {
         local group = vim.api.nvim_create_augroup("NvimTreesitter", { clear = true })
         vim.api.nvim_create_autocmd("FileType", {
             group = group,
-            pattern = filetypes,
+            pattern = "*",
             callback = function(event)
                 attach(event.buf)
             end,
@@ -117,7 +124,7 @@ return {
         vim.api.nvim_create_autocmd({ "BufUnload", "BufWipeout" }, {
             group = group,
             callback = function(event)
-                attached_parsers[event.buf] = nil
+                detach(event.buf)
             end,
         })
     end,
