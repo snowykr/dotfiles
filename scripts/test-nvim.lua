@@ -81,9 +81,60 @@ vim.schedule_wrap = function(callback)
 end
 
 local treesitter_plugin = dofile(repo .. "/config/nvim/lua/plugins/nvim-treesitter.lua")
+equal(treesitter_plugin.branch, "main", "Treesitter selects the modern API branch")
+equal(treesitter_plugin.version, false, "Treesitter does not select legacy release tags")
+
+-- A stale installed plugin/lockfile must fail before setup, with a repair path.
+local stale_setup_calls = 0
+package.loaded["nvim-treesitter"] = {
+    setup = function()
+        stale_setup_calls = stale_setup_calls + 1
+    end,
+}
+local stale_ok, stale_error = pcall(treesitter_plugin.config)
+equal(stale_ok, false, "Legacy Treesitter API is rejected")
+assert(tostring(stale_error):find("main-branch install API is missing", 1, true), "Stale API diagnostic explains the mismatch")
+assert(tostring(stale_error):find(":Lazy update nvim-treesitter", 1, true), "Stale API diagnostic identifies the repair command")
+assert(tostring(stale_error):find("Back up local lazy-lock.json changes", 1, true), "Stale API repair preserves local changes")
+equal(stale_setup_calls, 0, "Legacy plugin setup is not called")
+equal(installed_parsers, nil, "Stale API rejection does not start parser installation")
+package.loaded["nvim-treesitter"] = nil
+
 treesitter_plugin.config()
 equal_array(installed_parsers, parsers, "Treesitter parser install list")
 equal(treesitter_setup.install_dir, vim.fn.stdpath("data") .. "/site", "Treesitter install directory")
+
+-- First installation can create a site directory after Neovim cached the
+-- runtime paths. Completion must make its files visible without a restart.
+local original_runtimepath = vim.o.runtimepath
+local parser_lookup = vim.treesitter.get_parser
+local cold_site = vim.fn.tempname()
+local cold_buffer
+local runtime_ok, runtime_error = pcall(function()
+    vim.opt.runtimepath:prepend(cold_site)
+    equal(#vim.api.nvim_get_runtime_file("dotfiles-runtime-probe", true), 0, "Missing runtime directory is initially absent")
+    cold_buffer = vim.api.nvim_create_buf(false, true)
+    vim.treesitter.get_parser = function(buffer, parser)
+        if buffer == cold_buffer and #vim.api.nvim_get_runtime_file("dotfiles-runtime-probe", true) == 0 then
+            return nil, "Parser directory is not discoverable"
+        end
+        return parser_lookup(buffer, parser)
+    end
+    vim.bo[cold_buffer].filetype = "rust"
+    equal(started_buffers[cold_buffer], nil, "Existing buffer waits for its parser directory")
+    vim.fn.mkdir(cold_site, "p")
+    vim.fn.writefile({ "installed" }, cold_site .. "/dotfiles-runtime-probe")
+    complete_install(nil, true)
+    equal_array(vim.api.nvim_get_runtime_file("dotfiles-runtime-probe", true), { cold_site .. "/dotfiles-runtime-probe" }, "Install completion discovers a newly created runtime directory")
+    equal(started_buffers[cold_buffer], "rust", "Runtime cache refresh precedes existing-buffer attachment")
+end)
+vim.treesitter.get_parser = parser_lookup
+if cold_buffer and vim.api.nvim_buf_is_valid(cold_buffer) then
+    vim.api.nvim_buf_delete(cold_buffer, { force = true })
+end
+vim.o.runtimepath = original_runtimepath
+vim.fn.delete(cold_site, "rf")
+assert(runtime_ok, runtime_error)
 
 local function open_filetype(filetype, indentexpr)
     local buffer = vim.api.nvim_create_buf(false, true)
@@ -506,4 +557,75 @@ end
 
 check_bootstrap_failure({}, 0)
 check_bootstrap_failure({ { chan = 1 } }, 1)
+
+-- Upgrading dotfiles without upgrading Neovim must not bootstrap plugins under
+-- an unsupported runtime. UI startup keeps an editor open for repairing setup.
+local function check_startup_version(supported, uis)
+    local saved_has = vim.fn.has
+    local saved_version = vim.version
+    local saved_echo = vim.api.nvim_echo
+    local saved_uis = vim.api.nvim_list_uis
+    local saved_exit = os.exit
+    local saved_require = _G.require
+    local loaded = {}
+    local echoed
+    local exit_code
+    local stopped = {}
+
+    vim.fn.has = function(feature)
+        if feature == "nvim-0.12" then
+            return supported and 1 or 0
+        end
+        return saved_has(feature)
+    end
+    vim.version = function()
+        return { major = 0, minor = supported and 12 or 11, patch = supported and 0 or 5 }
+    end
+    vim.api.nvim_echo = function(chunks)
+        echoed = chunks[1][1]
+    end
+    vim.api.nvim_list_uis = function()
+        return uis
+    end
+    os.exit = function(code)
+        exit_code = code
+        error(stopped, 0)
+    end
+    _G.require = function(module)
+        loaded[#loaded + 1] = module
+        return {}
+    end
+
+    local ok, err = pcall(dofile, repo .. "/config/nvim/init.lua")
+    _G.require = saved_require
+    vim.fn.has = saved_has
+    vim.version = saved_version
+    vim.api.nvim_echo = saved_echo
+    vim.api.nvim_list_uis = saved_uis
+    os.exit = saved_exit
+
+    if supported then
+        equal(ok, true, "Supported Neovim loads configuration")
+        equal_array(loaded, { "config.options", "config.keymaps", "config.lazy", "config.local" }, "Supported startup order")
+        equal(echoed, nil, "Supported startup has no version failure")
+        equal(exit_code, nil, "Supported startup does not exit")
+    else
+        equal(#loaded, 0, "Old Neovim loads no configuration modules or plugin manager")
+        assert(echoed:find("Neovim 0.12 or newer", 1, true), "Version failure states the requirement")
+        assert(echoed:find("0.11.5", 1, true), "Version failure identifies the actual runtime")
+        assert(echoed:find(vim.v.progpath, 1, true), "Version failure identifies the selected executable")
+        if #uis == 0 then
+            equal(ok, false, "Unsupported headless startup stops")
+            equal(err, stopped, "Unsupported startup reaches the deliberate exit")
+            equal(exit_code, 1, "Unsupported headless startup fails visibly")
+        else
+            equal(ok, true, "Unsupported UI startup returns to an unconfigured editor")
+            equal(exit_code, nil, "Unsupported UI startup does not close the editor")
+        end
+    end
+end
+
+check_startup_version(false, {})
+check_startup_version(false, { { chan = 1 } })
+check_startup_version(true, {})
 print("Offline Neovim configuration tests passed.")

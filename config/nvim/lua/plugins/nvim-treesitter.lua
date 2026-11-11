@@ -92,10 +92,17 @@ end
 
 return {
     "nvim-treesitter/nvim-treesitter",
+    branch = "main",
+    version = false,
     lazy = false,
     build = ":TSUpdate",
     config = function()
         local treesitter = require("nvim-treesitter")
+        if type(treesitter.install) ~= "function" then
+            error("Incompatible nvim-treesitter: the main-branch install API is missing. "
+                .. "Back up local lazy-lock.json changes, then run :Lazy update nvim-treesitter "
+                .. "with Neovim 0.12 or newer and restart Neovim.", 0)
+        end
 
         treesitter.setup({
             install_dir = vim.fn.stdpath("data") .. "/site",
@@ -106,6 +113,9 @@ return {
                 vim.notify("Some Treesitter parsers could not be installed.", vim.log.levels.WARN)
             end
 
+            -- setup may register a site directory before it exists. Reassigning
+            -- the option invalidates Neovim's cached runtime directory list.
+            vim.o.runtimepath = vim.o.runtimepath
             for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
                 if vim.api.nvim_buf_is_loaded(buffer) then
                     attach(buffer)
