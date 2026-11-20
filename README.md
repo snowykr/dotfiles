@@ -211,6 +211,8 @@ Both schedule `/bin/sh <installed-repo>/maintain.sh update`, without sudo. Absol
 
 The maintenance command never calls initialization after updating. Updating linked files does not forcibly reload running shells or applications.
 
+Ghostty uses JetBrainsMono Nerd Font Mono for its main font and NAVER's [D2Coding](https://github.com/naver/d2-coding-font) for Hangul. The macOS `--homebrew` bundle installs both. On an existing Mac, run `brew install --cask font-d2coding` after updating and restart Ghostty; maintenance does not install the font.
+
 ## Per-machine overrides
 
 Machine-specific settings live outside the checkout, so updates never overwrite them and never have to be blocked to keep them:
