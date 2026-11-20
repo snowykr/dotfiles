@@ -1,6 +1,7 @@
 font-family = JetBrainsMono Nerd Font Mono
 font-size = 14
-font-codepoint-map = U+1100-U+11FF,U+3130-U+318F,U+A960-U+A97F,U+AC00-U+D7AF,U+D7B0-U+D7FF=Pretendard
+# D2Coding covers modern syllables and compatibility jamo; other jamo use font fallback.
+font-codepoint-map = U+3131-U+318E,U+AC00-U+D7A3=D2Coding
 shell-integration-features = cursor,no-sudo,title,no-ssh-env,ssh-terminfo,path
 clipboard-read = ask
 clipboard-write = allow
