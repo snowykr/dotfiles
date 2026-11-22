@@ -72,6 +72,23 @@ To review or apply macOS preferences separately:
 "$HOME/.dotfiles/scripts/macos-defaults.sh"
 ```
 
+## Windows PowerShell
+
+Use Windows PowerShell 5.1 or PowerShell 7. Install [Microsoft App Installer](https://learn.microsoft.com/windows/package-manager/winget/) for WinGet and bootstrap Git (`winget install --exact --id Git.Git --source winget`) before cloning. Authenticate to the private repository with Git Credential Manager or `gh auth login` and `gh auth setup-git` before cloning over HTTPS.
+
+```powershell
+git clone https://github.com/snowykr/dotfiles.git "$HOME\.dotfiles"
+Set-Location "$HOME\.dotfiles"
+.\install-windows.ps1 -WhatIf
+.\install-windows.ps1
+```
+
+The installer adds a managed block to the current PowerShell edition's user-wide profile, preserving unrelated content and backing up an existing profile beside it. Run it separately from each edition you use. It installs missing Git, GitHub CLI, uv, Go, Rustup (stable, minimal), pyenv-win and NVM for Windows. Existing global Git identity values are kept. `-NoTools`, `-NoGitConfig` and `-NoProfile` skip the corresponding steps. `-WhatIf` previews writes and installs without making them. Package installers may require elevation; reopen PowerShell after setup to pick up new PATH entries. Sign in to `gh` separately if needed.
+
+Use `pyenv install <version>` and `pyenv global <version>` to select Python. Use `nvm install <version>` and `nvm use <version>` to select Node; NVM installation is skipped when standalone Node is found. Migrate standalone Node deliberately rather than having setup uninstall it. Rust's default MSVC target also needs Visual Studio Build Tools with the C++ workload and Windows SDK to link native binaries.
+
+Keep machine-specific settings outside Git in `%LOCALAPPDATA%\dotfiles\local\profile.ps1`. The user profile loads the managed profile from this checkout on new shell startup. To refresh the installed checkout, run `git -C "$HOME\.dotfiles" pull --ff-only` on a clean `main`, then open a new shell. Windows does not use the macOS/Linux updater or install a scheduled task.
+
 ## Maintain
 
 ```sh
