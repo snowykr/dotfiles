@@ -9,12 +9,15 @@ if ($env:OS -eq 'Windows_NT') {
     } else {
         $dotfilesPaths = @()
     }
+    $dotfilesPaths += (Join-Path $HOME '.local\bin')
     $dotfilesPaths += (Join-Path $HOME '.cargo\bin')
     $dotfilesPaths += (Join-Path $HOME 'go\bin')
     $dotfilesPaths += (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
     $env:Path = ((@($dotfilesPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Container }) +
         @($env:Path -split ';')) | Where-Object { $_ } | Select-Object -Unique) -join ';'
     Remove-Variable dotfilesPyenv, dotfilesPaths
+
+    . (Join-Path $PSScriptRoot 'shortcuts.ps1')
 
     # Keep machine-specific overrides out of the checkout.
     $dotfilesLocalProfile = Join-Path $env:LOCALAPPDATA 'dotfiles\local\profile.ps1'

@@ -87,9 +87,11 @@ The installer adds a managed block to the current PowerShell edition's user-wide
 
 Use `pyenv install <version>` and `pyenv global <version>` to select Python. Use `nvm install <version>` and `nvm use <version>` to select Node; NVM installation is skipped when standalone Node is found. Migrate standalone Node deliberately rather than having setup uninstall it. Rust's default MSVC target also needs Visual Studio Build Tools with the C++ workload and Windows SDK to link native binaries.
 
-Keep machine-specific settings outside Git in `%LOCALAPPDATA%\dotfiles\local\profile.ps1`. The user profile loads the managed profile from this checkout on new shell startup.
+The PowerShell profile includes the shared Git, npm and shell shortcuts. Windows uses `gcm` for `gc` (Git commit; spell out `Get-Command`), `ghome` for `h`, `gundo` for `gu` and `npi` for `ni`. `gbb` uses `git switch` when `git-switchbranch` is unavailable. The `tmux` shortcuts require `tmux` on PATH, and `gjcdev` requires Bun and a GJC checkout. `rc` opens the user-wide PowerShell profile in a terminal editor.
 
-From the installed checkout on `main`, run `./maintain-windows.ps1 -Action update` to check for updates now. Opt in to a 15-minute Windows Task Scheduler check with `./maintain-windows.ps1 -Action enable`; `-Action status` shows the task and recent results, and `-Action disable` removes the task. The task runs under your interactive user account, so you must be signed in. Git must be able to reach the private `origin` without prompting. Updates only fast-forward a clean `main` from `origin/main`; they do not install packages or rerun setup. Open a new PowerShell session to load changed profile settings.
+Use `s` to refresh the current session's PATH from Windows and reapply the profile environment over SSH. This includes executables installed in `~\.local\bin` (such as Claude Code). To load new shortcut definitions in an already open shell, run `. $PROFILE.CurrentUserAllHosts` in that shell. Keep machine-specific settings outside Git in `%LOCALAPPDATA%\dotfiles\local\profile.ps1`.
+
+From the installed checkout on `main`, run `./maintain-windows.ps1 -Action update` to check for updates now. Opt in to a 15-minute Windows Task Scheduler check with `./maintain-windows.ps1 -Action enable`; `-Action status` shows the task and recent results, and `-Action disable` removes the task. The task runs under your interactive user account, so you must be signed in. Git must be able to reach the private `origin` without prompting. Updates only fast-forward a clean `main` from `origin/main`; they do not install packages or rerun setup.
 
 ## Maintain
 
