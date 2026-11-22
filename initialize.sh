@@ -132,7 +132,7 @@ configure_git() {
     fi
 }
 configure_git user.name snowykr
-configure_git user.email snowykr22@gmail.com
+configure_git user.email jun.koo@snowy.kr
 
 backup_dir="$HOME/.dotfiles-backups/$(date +%Y%m%d-%H%M%S)-$$"
 backed_up=0

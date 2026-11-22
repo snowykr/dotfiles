@@ -48,7 +48,7 @@ On macOS, every explicit initialization installs or updates [Tacit](https://gith
 
 This executes trusted upstream code: the installer chooses the platform package and checks its SHA-256; that checksum checks corruption, not independent authenticity. The upstream installer installs the unsigned app at `~/Library/Input Methods/tacit.app` and commands at `~/.local/bin/tacit` and `~/.local/bin/tacit-config`, and removes quarantine attributes. Explicit language selection skips the first-run welcome browser. Each initialization reapplies the Japanese-capable edition and `ja,en,ko` language order, while retaining unrelated settings and learned data. **Log out and back in, then manually add Tacit as an input source in System Settings → Keyboard → Text Input → Edit.**
 
-Git identity is set to `snowykr` / `snowykr22@gmail.com`. Application configuration is linked under `${XDG_CONFIG_HOME:-$HOME/.config}`; a custom configuration root must be absolute. Before any setup side effects, initialization resolves destination parents and refuses paths inside the checkout, including ancestor symlinks into it. It also refuses real destination directories that contain the checkout, since backing up such a directory would move the source itself; backing up a final symlink does not move its referent. Destination paths must not contain `..` components, newlines or carriage returns; dangling or non-directory ancestors are also refused. Existing correct final symlinks remain supported. Backup storage is subject to the same checkout-overlap protection. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
+Git identity is set to `snowykr` / `jun.koo@snowy.kr`. Application configuration is linked under `${XDG_CONFIG_HOME:-$HOME/.config}`; a custom configuration root must be absolute. Before any setup side effects, initialization resolves destination parents and refuses paths inside the checkout, including ancestor symlinks into it. It also refuses real destination directories that contain the checkout, since backing up such a directory would move the source itself; backing up a final symlink does not move its referent. Destination paths must not contain `..` components, newlines or carriage returns; dangling or non-directory ancestors are also refused. Existing correct final symlinks remain supported. Backup storage is subject to the same checkout-overlap protection. Existing configuration is backed up under `~/.dotfiles-backups/` before linking. Repeated initialization leaves matching links and preferences unchanged. It does not change the login shell with `chsh`.
 
 Automatic maintenance is **off by default on a fresh setup**. To opt in during initialization, run `./initialize.sh --auto-update`; after successful setup it registers maintenance for a `main` checkout with an `origin` remote. Registration is skipped on development branches. Plain initialization and its dry-run never change scheduler registration, including on repeat runs. To stop an already-enabled schedule, explicitly run `./maintain.sh disable`. Private-repository credentials must work without a terminal prompt; authentication is not performed by a scheduled job.
 
@@ -71,6 +71,25 @@ To review or apply macOS preferences separately:
 "$HOME/.dotfiles/scripts/macos-defaults.sh" --dry-run
 "$HOME/.dotfiles/scripts/macos-defaults.sh"
 ```
+
+## Windows PowerShell
+
+Use Windows PowerShell 5.1 or PowerShell 7. Install [Microsoft App Installer](https://learn.microsoft.com/windows/package-manager/winget/) for WinGet and bootstrap Git (`winget install --exact --id Git.Git --source winget`) before cloning. Authenticate to the private repository with Git Credential Manager or `gh auth login` and `gh auth setup-git` before cloning over HTTPS.
+
+```powershell
+git clone https://github.com/snowykr/dotfiles.git "$HOME\.dotfiles"
+Set-Location "$HOME\.dotfiles"
+.\install-windows.ps1 -WhatIf
+.\install-windows.ps1
+```
+
+The installer adds a managed block to the current PowerShell edition's user-wide profile, preserving unrelated content and backing up an existing profile beside it. Run it separately from each edition you use. It installs missing Git, GitHub CLI, uv, Go, Rustup (stable, minimal), pyenv-win and NVM for Windows. Existing global Git identity values are kept, except the previous dotfiles email is updated to `jun.koo@snowy.kr`. `-NoTools`, `-NoGitConfig` and `-NoProfile` skip the corresponding steps. `-WhatIf` previews writes and installs without making them. Package installers may require elevation; reopen PowerShell after setup to pick up new PATH entries. Sign in to `gh` separately if needed.
+
+Use `pyenv install <version>` and `pyenv global <version>` to select Python. Use `nvm install <version>` and `nvm use <version>` to select Node; NVM installation is skipped when standalone Node is found. Migrate standalone Node deliberately rather than having setup uninstall it. Rust's default MSVC target also needs Visual Studio Build Tools with the C++ workload and Windows SDK to link native binaries.
+
+Keep machine-specific settings outside Git in `%LOCALAPPDATA%\dotfiles\local\profile.ps1`. The user profile loads the managed profile from this checkout on new shell startup.
+
+From the installed checkout on `main`, run `./maintain-windows.ps1 -Action update` to check for updates now. Opt in to a 15-minute Windows Task Scheduler check with `./maintain-windows.ps1 -Action enable`; `-Action status` shows the task and recent results, and `-Action disable` removes the task. The task runs under your interactive user account, so you must be signed in. Git must be able to reach the private `origin` without prompting. Updates only fast-forward a clean `main` from `origin/main`; they do not install packages or rerun setup. Open a new PowerShell session to load changed profile settings.
 
 ## Maintain
 
