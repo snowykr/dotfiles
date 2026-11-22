@@ -59,7 +59,24 @@ try {
         throw 'The installer modified the profile with an unmatched loader marker.'
     }
 
-    Write-Output 'Windows installer profile tests passed.'
+    $originalGlobal = $env:GIT_CONFIG_GLOBAL
+    $env:GIT_CONFIG_GLOBAL = Join-Path $tempRoot 'gitconfig'
+    try {
+        git config --global user.name 'Existing Name'
+        if ($LASTEXITCODE) { throw 'Could not seed test identity.' }
+        git config --global user.email 'snowykr22@gmail.com'
+        if ($LASTEXITCODE) { throw 'Could not seed legacy email.' }
+        & $installer -NoTools -NoProfile
+        if ((git config --global --get user.email) -cne 'jun.koo@snowy.kr' -or
+            (git config --global --get user.name) -cne 'Existing Name') { throw 'Identity migration did not preserve the existing name.' }
+        git config --global user.email 'custom@example.test'
+        if ($LASTEXITCODE) { throw 'Could not seed custom email.' }
+        & $installer -NoTools -NoProfile
+        if ((git config --global --get user.email) -cne 'custom@example.test') { throw 'Custom Git email was overwritten.' }
+    } finally {
+        $env:GIT_CONFIG_GLOBAL = $originalGlobal
+    }
+    Write-Output 'Windows installer profile and identity tests passed.'
 } finally {
     if (Test-Path -LiteralPath $tempRoot) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force

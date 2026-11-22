@@ -67,7 +67,7 @@ HOME="$root/mac" SHELL=/bin/bash "$repo/initialize.sh" --dry-run --no-packages >
 [ ! -e "$root/preferences" ]
 HOME="$root/mac" SHELL=/bin/bash "$repo/initialize.sh" --no-packages > "$root/installed"
 [ "$(HOME="$root/mac" git config --global --get user.name)" = snowykr ]
-[ "$(HOME="$root/mac" git config --global --get user.email)" = snowykr22@gmail.com ]
+[ "$(HOME="$root/mac" git config --global --get user.email)" = jun.koo@snowy.kr ]
 [ "$(readlink "$root/mac/.zshrc")" = "$repo/shell/zshrc" ]
 [ ! -e "$root/mac/.bashrc" ]
 [ "$(readlink "$root/mac/.config/nvim")" = "$repo/config/nvim" ]

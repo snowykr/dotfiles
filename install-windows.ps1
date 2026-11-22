@@ -104,11 +104,12 @@ if (-not $NoGitConfig) {
     if (-not $git) {
         if (-not $WhatIfPreference) { throw 'Git is missing. Install it or pass -NoGitConfig.' }
     }
-    foreach ($setting in @(@('user.name', 'snowykr'), @('user.email', 'snowykr22@gmail.com'))) {
+    foreach ($setting in @(@('user.name', 'snowykr'), @('user.email', 'jun.koo@snowy.kr'))) {
         $key, $value = $setting
         if ($git) {
             $current = & $git.Source config --global --get $key
-            if ($LASTEXITCODE -eq 0 -and $current) { continue }
+            if ($LASTEXITCODE -eq 0 -and $current -and
+                -not ($key -eq 'user.email' -and $current -eq 'snowykr22@gmail.com')) { continue }
             if ($LASTEXITCODE -notin 0, 1) { throw "Could not read Git setting $key." }
         }
         if ($PSCmdlet.ShouldProcess($key, "Set Git identity to $value")) {
