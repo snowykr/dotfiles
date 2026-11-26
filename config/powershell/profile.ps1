@@ -24,7 +24,12 @@ if ($env:OS -eq 'Windows_NT') {
 
     if ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
         $dotfilesStarship = Get-Command starship.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($dotfilesStarship) {
+        if ($dotfilesStarship -and -not (Get-Module PSReadLine)) {
+            Import-Module PSReadLine -ErrorAction SilentlyContinue
+        }
+        # The generated prompt calls this API on every redraw.
+        $dotfilesReadLine = 'Microsoft.PowerShell.PSConsoleReadLine' -as [type]
+        if ($dotfilesStarship -and $dotfilesReadLine -and $dotfilesReadLine.GetMethod('InViCommandMode', [type[]]@())) {
             # Starship emits UTF-8; Windows PowerShell can use a legacy console code page.
             $dotfilesConsoleEncoding = [Console]::OutputEncoding
             try {
@@ -37,7 +42,7 @@ if ($env:OS -eq 'Windows_NT') {
             if ($LASTEXITCODE -eq 0 -and $dotfilesPrompt) { Invoke-Expression ($dotfilesPrompt -join "`n") }
             Remove-Variable dotfilesPrompt
         }
-        Remove-Variable dotfilesStarship
+        Remove-Variable dotfilesStarship, dotfilesReadLine
     }
 
     # Keep machine-specific overrides out of the checkout.
