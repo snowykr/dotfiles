@@ -55,8 +55,6 @@ function Invoke-DotfilesEditor([string] $FilePath) {
     }
     throw 'No terminal editor found. Install Neovim, Vim, or Microsoft Edit.'
 }
-function ocrc { Invoke-DotfilesEditor (Join-Path $HOME '.config\opencode\opencode.json') }
-function omorc { Invoke-DotfilesEditor (Join-Path $HOME '.config\opencode\oh-my-openagent.json') }
 function rc { Invoke-DotfilesEditor $PROFILE.CurrentUserAllHosts }
 function s {
     $env:Path = @(
@@ -70,8 +68,6 @@ function l {
     if (Get-Command eza -ErrorAction SilentlyContinue) { if (-not $args.Count) { $args = @('.') }; eza -lah @args }
     else { Get-ChildItem -Force @args }
 }
-function ll { Get-ChildItem -Force @args }
-function la { Get-ChildItem -Force -Name @args }
 function gs {
     # Windows PowerShell can turn redirected native stderr into a terminating error.
     $ErrorActionPreference = 'Continue'
@@ -116,7 +112,3 @@ function gjcdev {
         bun (Join-Path $repo 'packages\coding-agent\src\cli.ts') @args
     }
 }
-
-function tsw { tmux select-window -t @args }
-function tnw { tmux new-window @args }
-function tkw { tmux kill-window @args }

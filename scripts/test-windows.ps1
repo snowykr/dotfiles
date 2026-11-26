@@ -89,6 +89,11 @@ try {
             (Get-Alias gc).Definition -ne 'Get-Content' -or
             (Get-Alias ni).Definition -ne 'New-Item') { throw 'Unexpected PowerShell alias mapping.' }
         if ($bunPath -notin ($env:Path -split ';')) { throw 'The custom Bun bin directory is missing from PATH.' }
+        foreach ($shortcut in 'll', 'la', 'tsw', 'tnw', 'tkw', 'ocrc', 'omorc') {
+            if (Get-Command $shortcut -CommandType Alias,Function -ErrorAction SilentlyContinue) {
+                throw "Removed shortcut is still loaded: $shortcut"
+            }
+        }
         Push-Location -LiteralPath $tempRoot
         try {
             h
@@ -106,8 +111,6 @@ try {
             gcm 'shortcut commit with spaces'
             if ($LASTEXITCODE -or (git log -1 --format=%s) -cne 'shortcut commit with spaces') { throw 'gcm did not commit.' }
             if (-not ((gs --short --branch) -match '^## ')) { throw 'gs did not forward status arguments.' }
-            if ('file with spaces.txt' -notin (la -File)) { throw 'la did not list file names.' }
-            if (@(ll -File).Count -ne 1) { throw 'll did not honor the native -File option.' }
         } finally { Pop-Location }
     } finally {
         $env:LOCALAPPDATA = $savedLocalAppData
