@@ -1,5 +1,7 @@
 # Shared shell shortcuts, adapted to native Windows PowerShell.
-function ghome { Set-Location -LiteralPath $HOME }
+function Set-DotfilesHome { Set-Location -LiteralPath $HOME }
+# Match Bash and Zsh; spell out Get-History for the PowerShell command.
+Set-Alias -Name h -Value Set-DotfilesHome -Option AllScope -Force
 function hr { herdr @args }
 function c { Clear-Host }
 
@@ -65,7 +67,7 @@ function s {
 }
 
 function l {
-    if (Get-Command eza -ErrorAction SilentlyContinue) { eza -lah @args }
+    if (Get-Command eza -ErrorAction SilentlyContinue) { if (-not $args.Count) { $args = @('.') }; eza -lah @args }
     else { Get-ChildItem -Force @args }
 }
 function ll { Get-ChildItem -Force @args }
@@ -75,7 +77,7 @@ function gs {
     $ErrorActionPreference = 'Continue'
     $inWorkTree = git rev-parse --is-inside-work-tree 2>$null
     if ($LASTEXITCODE -eq 0 -and $inWorkTree -eq 'true') { git status @args }
-    elseif (Get-Command eza -ErrorAction SilentlyContinue) { eza @args }
+    elseif (Get-Command eza -ErrorAction SilentlyContinue) { if (-not $args.Count) { $args = @('.') }; eza @args }
     else { Get-ChildItem @args }
 }
 function mc {
