@@ -10,6 +10,9 @@ if ($env:OS -eq 'Windows_NT') {
         $dotfilesPaths = @()
     }
     $dotfilesPaths += (Join-Path $HOME '.local\bin')
+    if (-not $env:BUN_INSTALL) { $env:BUN_INSTALL = Join-Path $HOME '.bun' }
+    $dotfilesPaths += (Join-Path $env:BUN_INSTALL 'bin')
+    $dotfilesPaths += (Join-Path $HOME '.opencode\bin')
     $dotfilesPaths += (Join-Path $HOME '.cargo\bin')
     $dotfilesPaths += (Join-Path $HOME 'go\bin')
     $dotfilesPaths += (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links')
@@ -18,6 +21,24 @@ if ($env:OS -eq 'Windows_NT') {
     Remove-Variable dotfilesPyenv, dotfilesPaths
 
     . (Join-Path $PSScriptRoot 'shortcuts.ps1')
+
+    if ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+        $dotfilesStarship = Get-Command starship.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($dotfilesStarship) {
+            # Starship emits UTF-8; Windows PowerShell can use a legacy console code page.
+            $dotfilesConsoleEncoding = [Console]::OutputEncoding
+            try {
+                [Console]::OutputEncoding = [Text.Encoding]::UTF8
+                $dotfilesPrompt = & $dotfilesStarship.Source init powershell --print-full-init
+            } finally {
+                [Console]::OutputEncoding = $dotfilesConsoleEncoding
+                Remove-Variable dotfilesConsoleEncoding
+            }
+            if ($LASTEXITCODE -eq 0 -and $dotfilesPrompt) { Invoke-Expression ($dotfilesPrompt -join "`n") }
+            Remove-Variable dotfilesPrompt
+        }
+        Remove-Variable dotfilesStarship
+    }
 
     # Keep machine-specific overrides out of the checkout.
     $dotfilesLocalProfile = Join-Path $env:LOCALAPPDATA 'dotfiles\local\profile.ps1'

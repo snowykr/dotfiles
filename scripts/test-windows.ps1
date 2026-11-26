@@ -78,14 +78,22 @@ try {
     }
     $savedLocalAppData = $env:LOCALAPPDATA
     $savedPath = $env:Path
+    $savedBun = $env:BUN_INSTALL
     $env:LOCALAPPDATA = $tempRoot
+    $env:BUN_INSTALL = Join-Path $tempRoot 'custom bun'
+    $bunPath = Join-Path $env:BUN_INSTALL 'bin'
+    [void][IO.Directory]::CreateDirectory($bunPath)
     try {
         . (Join-Path (Split-Path -Parent $PSScriptRoot) 'config\powershell\profile.ps1')
         if ((Get-Alias gcm).Definition -ne 'Invoke-DotfilesGitCommit' -or
             (Get-Alias gc).Definition -ne 'Get-Content' -or
             (Get-Alias ni).Definition -ne 'New-Item') { throw 'Unexpected PowerShell alias mapping.' }
+        if ($bunPath -notin ($env:Path -split ';')) { throw 'The custom Bun bin directory is missing from PATH.' }
         Push-Location -LiteralPath $tempRoot
         try {
+            h
+            if ((Get-Location).Path -ne $HOME) { throw 'h did not go home.' }
+            Set-Location -LiteralPath $tempRoot
             mc 'shortcut checkout'
             if ((Get-Location).Path -ne (Join-Path $tempRoot 'shortcut checkout')) { throw 'mc did not change directory.' }
             git init --quiet
@@ -98,11 +106,13 @@ try {
             gcm 'shortcut commit with spaces'
             if ($LASTEXITCODE -or (git log -1 --format=%s) -cne 'shortcut commit with spaces') { throw 'gcm did not commit.' }
             if (-not ((gs --short --branch) -match '^## ')) { throw 'gs did not forward status arguments.' }
-            if ('file with spaces.txt' -notin (la)) { throw 'la did not list file names.' }
+            if ('file with spaces.txt' -notin (la -File)) { throw 'la did not list file names.' }
+            if (@(ll -File).Count -ne 1) { throw 'll did not honor the native -File option.' }
         } finally { Pop-Location }
     } finally {
         $env:LOCALAPPDATA = $savedLocalAppData
         $env:Path = $savedPath
+        $env:BUN_INSTALL = $savedBun
     }
     Write-Output 'Windows installer, identity and shortcut tests passed.'
 } finally {

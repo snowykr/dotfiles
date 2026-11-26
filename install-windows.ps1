@@ -76,6 +76,9 @@ if (-not $NoTools) {
     Install-WingetTool 'gh.exe' 'GitHub.cli'
     Install-WingetTool 'uv.exe' 'astral-sh.uv'
     Install-WingetTool 'go.exe' 'GoLang.Go'
+    Install-WingetTool 'starship.exe' 'Starship.Starship'
+    Install-WingetTool 'eza.exe' 'eza-community.eza'
+    Install-WingetTool 'bun.exe' 'Oven-sh.Bun'
     Install-WingetTool 'rustup.exe' 'Rustlang.Rustup' @('--override', '-y --default-toolchain stable --profile minimal')
 
     $pyenvRoot = Join-Path $HOME '.pyenv'
