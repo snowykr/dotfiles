@@ -26,8 +26,6 @@ alias ni='npm install'
 alias nrb='npm run build'
 alias nrd='npm run dev'
 alias nrl='npm run lint'
-alias ocrc='nvim "$HOME/.config/opencode/opencode.json"'
-alias omorc='nvim "$HOME/.config/opencode/oh-my-openagent.json"'
 
 if command -v eza >/dev/null 2>&1; then
     alias l='eza -lah'

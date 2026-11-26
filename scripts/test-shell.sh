@@ -102,6 +102,14 @@ with tempfile.TemporaryDirectory(prefix='dotfiles-shell-') as temporary:
         link.unlink()
         link.symlink_to(checkout / f'{name}rc')
 
+    (checkout / 'common.sh').write_text((repo / 'shell' / 'common.sh').read_text())
+    for name in shells:
+        check(run(name, f'. "$HOME/.{name}rc"; '
+                  'alias l h s >/dev/null || exit 1; '
+                  'for shortcut in ll la tsw tnw tkw ocrc omorc; do '
+                  'if alias "$shortcut" >/dev/null 2>&1; then printf "%s\\n" "$shortcut"; fi; '
+                  'done > "$RESULT"'), b'', f'{name} removed aliases')
+
     # Both intentional architecture orders survive repeated sourcing and deduplication.
     for first, second in ((native, intel), (intel, native)):
         initial = f'{first}:{second}:{tools}:{first}'
