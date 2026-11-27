@@ -77,3 +77,6 @@ jobs:
       - name: Test Windows installer and profile
         shell: powershell
         run: ./scripts/test-windows.ps1
+      - name: Test Windows maintenance and scheduler migration
+        shell: powershell
+        run: ./scripts/test-maintain-windows.ps1
